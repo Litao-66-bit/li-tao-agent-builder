@@ -1,0 +1,80 @@
+<html style="margin:0;padding:0;">
+<title>Agent Builder 部署环境总览</title>
+<div style="width:100%;box-sizing:border-box;background:#f6f8fb;font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;padding:20px 16px;color:#22303f;">
+
+  <!-- 目标 -->
+  <div style="max-width:980px;margin:0 auto;">
+    <div style="background:#0f766e;color:#fff;border-radius:12px;padding:16px 20px;margin-bottom:18px;">
+      <div style="font-size:18px;font-weight:700;margin-bottom:4px;">目标：GitHub 上的 Agent Builder（元 Agent）</div>
+      <div style="font-size:14px;opacity:.92;">用户输入需求 → 规划 Agent 类型/工具/模型 → 自动生成可运行的 Agent 代码 → 沙箱验证 → 交付</div>
+    </div>
+
+    <!-- 第一部分：前置部署条件 -->
+    <div style="font-size:16px;font-weight:700;color:#0f766e;margin:6px 0 10px;">① 前置部署条件（三层）</div>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:18px;">
+      <div style="flex:1 1 240px;min-width:220px;background:#fff;border:1px solid #d8e0ea;border-left:5px solid #0ea5e9;border-radius:10px;padding:12px 14px;">
+        <div style="font-weight:700;font-size:15px;margin-bottom:6px;">硬件</div>
+        <div style="font-size:13.5px;line-height:1.7;color:#3d4c5c;">
+          仅用 API：普通电脑即可<br>
+          本地推理：GPU 建议 12GB 显存起<br>
+          （7B 量化≈6–8GB / 14B≈12–16GB）<br>
+          磁盘：模型 15–30GB / 项目 2GB
+        </div>
+      </div>
+      <div style="flex:1 1 240px;min-width:220px;background:#fff;border:1px solid #d8e0ea;border-left:5px solid #22c55e;border-radius:10px;padding:12px 14px;">
+        <div style="font-weight:700;font-size:15px;margin-bottom:6px;">软件</div>
+        <div style="font-size:13.5px;line-height:1.7;color:#3d4c5c;">
+          Git · Python 3.10+<br>
+          Node.js 18+（前端，可选）<br>
+          Docker（隔离运行，可选）<br>
+          本地推理：Ollama / vLLM / CUDA
+        </div>
+      </div>
+      <div style="flex:1 1 240px;min-width:220px;background:#fff;border:1px solid #d8e0ea;border-left:5px solid #f59e0b;border-radius:10px;padding:12px 14px;">
+        <div style="font-weight:700;font-size:15px;margin-bottom:6px;">账号与密钥</div>
+        <div style="font-size:13.5px;line-height:1.7;color:#3d4c5c;">
+          GitHub 账号（托管代码）<br>
+          模型 API Key（DeepSeek / 豆包·火山方舟 / 通义 / OpenAI）<br>
+          HuggingFace 或 ModelScope 账号（拉本地模型）
+        </div>
+      </div>
+    </div>
+
+    <!-- 第二部分：模型部署三路线 -->
+    <div style="font-size:16px;font-weight:700;color:#0f766e;margin:6px 0 10px;">② 模型部署三路线（建议 A 起步）</div>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:18px;">
+      <div style="flex:1 1 240px;min-width:220px;background:#ecfdf5;border:1.5px solid #10b981;border-radius:10px;padding:12px 14px;">
+        <div style="font-weight:700;font-size:15px;color:#047857;margin-bottom:4px;">A · API 托管（推荐起步）</div>
+        <div style="font-size:13.5px;line-height:1.7;color:#3d4c5c;">无 GPU、零运维、按 token 付费<br>DeepSeek-V3 / 豆包 / 通义 / GPT<br>适合：快速跑通 Demo 与迭代</div>
+      </div>
+      <div style="flex:1 1 240px;min-width:220px;background:#fff;border:1.5px solid #d8e0ea;border-radius:10px;padding:12px 14px;">
+        <div style="font-weight:700;font-size:15px;color:#334155;margin-bottom:4px;">B · 本地开源模型</div>
+        <div style="font-size:13.5px;line-height:1.7;color:#3d4c5c;">Ollama（最简单）/ vLLM（高吞吐）<br>Qwen2.5 · DeepSeek-R1-Distill · Llama3.1<br>适合：隐私敏感、零 API 成本</div>
+      </div>
+      <div style="flex:1 1 240px;min-width:220px;background:#fff;border:1.5px solid #d8e0ea;border-radius:10px;padding:12px 14px;">
+        <div style="font-weight:700;font-size:15px;color:#334155;margin-bottom:4px;">C · 混合模式</div>
+        <div style="font-size:13.5px;line-height:1.7;color:#3d4c5c;">本地跑日常推理，API 兜底复杂任务<br>成本与能力平衡<br>适合：上线后的生产形态</div>
+      </div>
+    </div>
+
+    <!-- 第三部分：环境搭建步骤 -->
+    <div style="font-size:16px;font-weight:700;color:#0f766e;margin:6px 0 10px;">③ 环境搭建六步流</div>
+    <div style="background:#fff;border:1px solid #d8e0ea;border-radius:10px;padding:14px;">
+      <div style="display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;">
+        <div style="flex:1 1 130px;background:#e0f2fe;border-radius:8px;padding:10px 12px;font-size:13.5px;line-height:1.6;">1️⃣ 安装 Git / Python 3.10+<div style="color:#64748b;font-size:12.5px;margin-top:2px;">git --version · python3 --version</div></div>
+        <div style="align-self:center;color:#94a3b8;font-size:18px;">→</div>
+        <div style="flex:1 1 130px;background:#e0f2fe;border-radius:8px;padding:10px 12px;font-size:13.5px;line-height:1.6;">2️⃣ 建仓库 + 虚拟环境<div style="color:#64748b;font-size:12.5px;margin-top:2px;">git init · python3 -m venv .venv</div></div>
+        <div style="align-self:center;color:#94a3b8;font-size:18px;">→</div>
+        <div style="flex:1 1 130px;background:#e0f2fe;border-radius:8px;padding:10px 12px;font-size:13.5px;line-height:1.6;">3️⃣ 安装框架依赖<div style="color:#64748b;font-size:12.5px;margin-top:2px;">LangGraph / Agno + SDK</div></div>
+        <div style="align-self:center;color:#94a3b8;font-size:18px;">→</div>
+        <div style="flex:1 1 130px;background:#e0f2fe;border-radius:8px;padding:10px 12px;font-size:13.5px;line-height:1.6;">4️⃣ 配置密钥 .env<div style="color:#64748b;font-size:12.5px;margin-top:2px;">API Key 入 .env，不入 Git</div></div>
+        <div style="align-self:center;color:#94a3b8;font-size:18px;">→</div>
+        <div style="flex:1 1 130px;background:#dcfce7;border-radius:8px;padding:10px 12px;font-size:13.5px;line-height:1.6;">5️⃣ 跑通最小 Demo<div style="color:#64748b;font-size:12.5px;margin-top:2px;">生成一个可运行的 Agent 并验证</div></div>
+        <div style="align-self:center;color:#94a3b8;font-size:18px;">→</div>
+        <div style="flex:1 1 130px;background:#dcfce7;border-radius:8px;padding:10px 12px;font-size:13.5px;line-height:1.6;">6️⃣ 推送 GitHub<div style="color:#64748b;font-size:12.5px;margin-top:2px;">README + CI + 示例，公开/私有</div></div>
+      </div>
+      <div style="margin-top:12px;background:#fefce8;border:1px dashed #eab308;border-radius:8px;padding:10px 12px;font-size:13.5px;color:#713f12;">最小可行组合：<b>普通电脑 + API 模型（DeepSeek）+ LangGraph + GitHub</b>，起步成本≈0、无需 GPU，当天可跑通。</div>
+    </div>
+  </div>
+</div>
+</html>
