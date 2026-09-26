@@ -55,6 +55,9 @@ data/raw/
 # ===== 工具运行时临时文件 =====
 .tmp-tool-results/
 
+# ===== 本地交付打包（不入库）=====
+agent-builder-windows.zip
+
 # ===== IDE / 系统 =====
 .idea/
 .vscode/
