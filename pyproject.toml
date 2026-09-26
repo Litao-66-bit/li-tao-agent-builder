@@ -9,6 +9,7 @@ dependencies = [
     "langgraph>=0.2",
     "langchain-openai>=0.2",
     "python-dotenv>=1.0",
+    "pydantic>=2.6",
 ]
 
 [project.optional-dependencies]
