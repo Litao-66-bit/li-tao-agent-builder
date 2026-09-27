@@ -40,4 +40,4 @@ class ToolSpec:
             raise ValueError(f"工具 {self.name!r} 必须至少声明一个 allowed_roles（最小权限）")
 
 
-__all__ = ["ToolSpec", "VALID_COST_BANDS", "VALID_RISK_LEVELS"]
+__all__ = ["VALID_COST_BANDS", "VALID_RISK_LEVELS", "ToolSpec"]

@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import contextvars
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-from typing import Any, Callable
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
+from typing import Any
 
 from agent_builder.contracts.errors import timeout_error, validation_error
 from agent_builder.contracts.schemas import ToolCall
