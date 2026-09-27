@@ -32,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("requirement", nargs="?", help="自然语言需求，如：帮我生成一个每日新闻摘要 Agent")
     parser.add_argument("--mock", action="store_true", help="使用 MockClient（无需 API Key 的演示模式）")
+    parser.add_argument("--max-calls", type=int, default=50, help="单任务 LLM 调用预算上限（默认 50，超限 E_COST 中止）")
+    parser.add_argument("--timeout", type=float, default=60.0, help="模型调用超时秒数，仅 DeepSeek 生效（默认 60）")
     args = parser.parse_args(argv)
 
     requirement = args.requirement
@@ -40,10 +42,17 @@ def main(argv: list[str] | None = None) -> int:
         if not requirement:
             parser.error("需求不能为空")
 
+    # ── 任务上下文与预算闸门（P0-1 成本分级）──────────────────────
+    from agent_builder.llm.budget import BudgetTracker
+
+    task_id = f"task-{uuid.uuid4().hex[:8]}"
+    correlation_id = f"c-{task_id}"
+    budget = BudgetTracker(max_calls=args.max_calls, correlation_id=correlation_id)
+
     # ── 构建 LLM 客户端 ──────────────────────────────────────────
     if args.mock:
-        llm = MockClient()
-        print("[mock] 使用 MockClient 演示模式")
+        llm = MockClient(budget=budget, correlation_id=correlation_id)
+        print(f"[mock] 使用 MockClient 演示模式（预算：{args.max_calls} 次调用）")
     else:
         load_dotenv()
         import os
@@ -57,20 +66,24 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        llm = DeepSeekClient(api_key)
+        llm = DeepSeekClient(
+            api_key,
+            request_timeout=args.timeout,
+            budget=budget,
+            correlation_id=correlation_id,
+        )
 
     # ── 运行最小闭环 ─────────────────────────────────────────────
     from langgraph.types import Command
 
     from agent_builder.graph.build import build_graph
 
-    task_id = f"task-{uuid.uuid4().hex[:8]}"
     config = {"configurable": {"thread_id": task_id}}
     graph = build_graph(llm)
 
     try:
         first = graph.invoke(
-            {"task_id": task_id, "requirement": requirement, "correlation_id": f"c-{task_id}"},
+            {"task_id": task_id, "requirement": requirement, "correlation_id": correlation_id},
             config,
         )
     except Exception as exc:  # noqa: BLE001 - CLI 兜底展示

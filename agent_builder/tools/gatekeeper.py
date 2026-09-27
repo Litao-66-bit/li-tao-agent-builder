@@ -15,6 +15,7 @@ from typing import Any
 
 from agent_builder.contracts.errors import permission_error
 from agent_builder.contracts.schemas import RolePerm, ToolCall
+from agent_builder.tools.redact import redact_args
 
 # 默认白名单目录：只有工作区内的路径可写（防路径穿越/越权写系统目录）。
 WORKSPACE_DIR = Path("/home/user/Doubao/chats/38443251841377538")
@@ -87,7 +88,7 @@ class ToolGatekeeper:
                 audit_id=tool_call.audit_id,
                 role=tool_call.role,
                 tool=tool_call.tool,
-                args=tool_call.args,
+                args=redact_args(tool_call.args),  # P0-3：审计留档前脱敏，防密钥泄漏
                 allowed=True,
                 reason="permission_matrix_ok",
                 correlation_id=self.correlation_id,
@@ -122,7 +123,7 @@ class ToolGatekeeper:
                 audit_id=tool_call.audit_id,
                 role=tool_call.role,
                 tool=tool_call.tool,
-                args=tool_call.args,
+                args=redact_args(tool_call.args),  # P0-3：拒绝记录同样脱敏
                 allowed=False,
                 reason=reason,
                 correlation_id=self.correlation_id,

@@ -16,12 +16,14 @@ ERROR_NAMES: dict[str, int] = {
     "E_MODEL": 4000,       # 模型错误（幻觉被拦截、输出截断、API 报错）→ 截断重试 1 次
     "E_TOOL": 5000,        # 工具异常（检索无结果、依赖安装失败、数据缺失）→ 换通道重试 1 次
     "E_USER_CANCEL": 6000, # 用户中断或拒绝审批 → 转 interrupted，保留 resume_point
+    "E_COST": 7000,        # 成本超限（调用次数/预估 token 达预算上限）→ 不重试，需调预算
     "E_INTERNAL": 9000,    # 内部错误（状态机非法转换、消息类型未知）→ 转 failed
 }
 
 # 名称 → 可重试性：仅 E_TIMEOUT/E_VALIDATION/E_MODEL/E_TOOL 允许重试。
-# E_PERMISSION 永不重试（越权不是偶然故障，必须人工介入）。
-NON_RETRYABLE: frozenset[str] = frozenset({"E_PERMISSION", "E_USER_CANCEL", "E_INTERNAL"})
+# E_PERMISSION 永不重试（越权不是偶然故障，必须人工介入）；
+# E_COST 永不重试（预算超限重试只会继续烧钱）。
+NON_RETRYABLE: frozenset[str] = frozenset({"E_PERMISSION", "E_USER_CANCEL", "E_COST", "E_INTERNAL"})
 
 
 def is_retryable(error_name: str) -> bool:
@@ -142,6 +144,11 @@ def user_cancel_error(message: str, source: str, correlation_id: str) -> AgentEr
     return AgentError("E_USER_CANCEL", message, source, correlation_id, retryable=False)
 
 
+def cost_error(message: str, source: str, correlation_id: str) -> AgentError:
+    """E_COST：成本/预算超限，永不重试（重试只会继续消耗资源）。"""
+    return AgentError("E_COST", message, source, correlation_id, retryable=False)
+
+
 def internal_error(message: str, source: str, correlation_id: str, cause: BaseException | None = None) -> AgentError:
     return AgentError("E_INTERNAL", message, source, correlation_id, retryable=False, cause=cause)
 
@@ -150,6 +157,7 @@ __all__ = [
     "ERROR_NAMES",
     "AgentError",
     "ErrorInfo",
+    "cost_error",
     "internal_error",
     "is_retryable",
     "model_error",
