@@ -80,8 +80,16 @@ class ToolGatekeeper:
             )
 
         # 文件类工具：沙箱路径校验（新增工具按需加入元组，不改已有校验逻辑）。
-        if tool_call.tool in ("file_write", "file_read", "file_edit", "file_list", "code_search"):
+        if tool_call.tool in ("file_write", "file_read", "file_edit", "file_list", "code_search", "data_query"):
             self._check_sandbox_path(tool_call)
+
+        # sandbox_run：可选 path 校验（path 存在则校验沙箱，不存在则跳过）。
+        if tool_call.tool == "sandbox_run":
+            self._check_sandbox_path_optional(tool_call)
+
+        # test_run：target 混合校验（URL → url_guard，路径 → 沙箱）。
+        if tool_call.tool == "test_run":
+            self._check_target_safety(tool_call)
 
         # web 类工具：URL 安全校验（防 SSRF，新增分支，不影响文件类校验）。
         if tool_call.tool in ("web_fetch", "web_search"):
@@ -161,6 +169,54 @@ class ToolGatekeeper:
                 source="tool_gatekeeper",
                 correlation_id=self.correlation_id,
             ) from exc
+
+    def _check_sandbox_path_optional(self, tool_call: ToolCall) -> None:
+        """sandbox_run 的 path 参数可选校验：存在则校验沙箱，不存在则跳过。"""
+        path_str = str(tool_call.args.get("path", "")).strip()
+        if not path_str:
+            return  # 可选参数，无值则跳过
+        candidate = Path(path_str).resolve()
+        try:
+            candidate.relative_to(self.workspace_dir)
+        except ValueError:
+            self._reject(tool_call, f"路径 {path_str} 超出沙箱白名单 {self.workspace_dir}")
+            raise permission_error(
+                f"路径 {path_str} 超出沙箱白名单",
+                source="tool_gatekeeper",
+                correlation_id=self.correlation_id,
+            ) from None
+
+    def _check_target_safety(self, tool_call: ToolCall) -> None:
+        """test_run 的 target 混合校验：URL → url_guard，路径 → 沙箱。"""
+        target = str(tool_call.args.get("target", "")).strip()
+        if not target:
+            self._reject(tool_call, "test_run 缺少 target 参数")
+            raise permission_error(
+                "test_run 缺少 target 参数",
+                source="tool_gatekeeper",
+                correlation_id=self.correlation_id,
+            )
+        if target.startswith(("http://", "https://")):
+            try:
+                validate_url(target)
+            except ValueError as exc:
+                self._reject(tool_call, f"URL 安全校验失败: {exc}")
+                raise permission_error(
+                    f"test_run URL 校验失败: {exc}",
+                    source="tool_gatekeeper",
+                    correlation_id=self.correlation_id,
+                ) from exc
+        else:
+            candidate = Path(target).resolve()
+            try:
+                candidate.relative_to(self.workspace_dir)
+            except ValueError:
+                self._reject(tool_call, f"路径 {target} 超出沙箱白名单 {self.workspace_dir}")
+                raise permission_error(
+                    f"路径 {target} 超出沙箱白名单",
+                    source="tool_gatekeeper",
+                    correlation_id=self.correlation_id,
+                ) from None
 
     # ── 查询 ─────────────────────────────────────────────────────
 

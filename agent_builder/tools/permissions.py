@@ -19,9 +19,13 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
             "file_write",
             "web_fetch",
             "web_search",
+            "citation_check",
+            "sandbox_run",
+            "test_run",
+            "data_query",
         ],
         high_risk_tools=["file_write"],
-        notes="操作者：可读/列白名单文件、代码搜索、抓取/搜索网页；写文件需审批",
+        notes="操作者：可读/列白名单文件、代码搜索、抓取/搜索网页、校验引用、沙箱执行、跑测试、读数据；写文件需审批",
     ),
 }
 
