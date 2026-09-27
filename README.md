@@ -137,3 +137,9 @@ ollama pull qwen2.5:7b
 [Mozilla Public License 2.0](https://mozilla.org/MPL/2.0/)（`LICENSE`）。
 
 MPL-2.0 是**文件级弱 copyleft** 许可证：修改或新增的 Covered Software 源码文件必须以 MPL-2.0 保持开源；但与这些文件分离开的代码（如你的闭源业务模块）可以自由选择许可证。它允许与 GPL/LGPL/AGPL 生态以外的商业项目混用，是开源 Agent 项目常见的折中选择。
+
+## 合规与安全
+
+- [NOTICE](NOTICE)：三方依赖许可证声明与兼容性说明
+- [SECURITY.md](SECURITY.md)：安全政策与漏洞报告渠道
+- [PRIVACY.md](PRIVACY.md)：运行时数据处理与隐私说明
