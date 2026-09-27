@@ -16,6 +16,7 @@ from typing import Any
 from agent_builder.contracts.errors import permission_error
 from agent_builder.contracts.schemas import RolePerm, ToolCall
 from agent_builder.tools.redact import redact_args
+from agent_builder.tools.url_guard import validate_url
 
 # 默认白名单目录：只有工作区内的路径可写（防路径穿越/越权写系统目录）。
 WORKSPACE_DIR = Path("/home/user/Doubao/chats/38443251841377538")
@@ -78,9 +79,13 @@ class ToolGatekeeper:
                 correlation_id=self.correlation_id,
             )
 
-        # 文件类工具：沙箱路径校验。
-        if tool_call.tool in ("file_write", "file_read", "file_edit", "file_list"):
+        # 文件类工具：沙箱路径校验（新增工具按需加入元组，不改已有校验逻辑）。
+        if tool_call.tool in ("file_write", "file_read", "file_edit", "file_list", "code_search"):
             self._check_sandbox_path(tool_call)
+
+        # web 类工具：URL 安全校验（防 SSRF，新增分支，不影响文件类校验）。
+        if tool_call.tool in ("web_fetch", "web_search"):
+            self._check_url_safety(tool_call)
 
         tool_call.status = "executed"
         self.audit_log.append(
@@ -129,6 +134,33 @@ class ToolGatekeeper:
                 correlation_id=self.correlation_id,
             )
         )
+
+    def _check_url_safety(self, tool_call: ToolCall) -> None:
+        """web 工具 URL 安全校验（防 SSRF）。
+
+        web_search 的 URL 在实现内部构造（args 无 url），门卫跳过；
+        web_fetch 的 url 在 args 里，门卫校验。
+        实现内部对内部构造的 URL 二次校验（双层防护）。
+        """
+        url = tool_call.args.get("url")
+        if url is None:
+            return  # 无 url 字段（如 web_search），由实现内部校验构造的 URL
+        if not str(url).strip():
+            self._reject(tool_call, "web 工具缺少 url 参数")
+            raise permission_error(
+                "web 工具缺少 url 参数",
+                source="tool_gatekeeper",
+                correlation_id=self.correlation_id,
+            )
+        try:
+            validate_url(str(url))
+        except ValueError as exc:
+            self._reject(tool_call, f"URL 安全校验失败: {exc}")
+            raise permission_error(
+                f"web 工具 URL 校验失败: {exc}",
+                source="tool_gatekeeper",
+                correlation_id=self.correlation_id,
+            ) from exc
 
     # ── 查询 ─────────────────────────────────────────────────────
 

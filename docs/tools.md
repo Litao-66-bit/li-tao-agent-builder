@@ -1,135 +1,70 @@
-# 工具清单（Tools）
+# 工具清单（Tool Inventory）
 
-本文件记录 `agent_builder/tools/impl/` 下所有已注册工具的规格与用法。
-新增工具时在此追加一条；删除工具时同步移除。
+Agent Builder 已注册工具一览。所有工具经 `ToolGatekeeper` 唯一出口执行：
+权限校验 → 高风险审批 → 沙箱/URL 校验 → 审计日志 → registry 分发。
 
-## 通用执行流程
+## operator 角色可用工具
 
-所有工具调用统一走 `ToolRegistry.execute(gatekeeper, tool_call)`：
+| 工具 | 用途 | 风险 | 审批 | 数据边界 | 超时 |
+|---|---|---|---|---|---|
+| `file_read` | 读文件内容（UTF-8） | low | 否 | 白名单目录（realpath 校验） | 10s |
+| `file_list` | 列目录 | low | 否 | 白名单目录 | 10s |
+| `code_search` | 代码内搜索（ripgrep） | low | 否 | 白名单目录 | 30s |
+| `file_write` | 写/覆盖文件 | medium | ⚠ 是 | 白名单目录；所有写均需审批 | 10s |
+| `web_fetch` | 抓取页面/文档 | low | 否 | http/https；禁私有网段（防 SSRF） | 30s |
+| `web_search` | 网页搜索（DuckDuckGo IA） | low | 否 | 固定 DDG API；禁内网 | 30s |
 
-1. **门卫校验**（`ToolGatekeeper.check`）：角色权限 / 沙箱路径 / 高风险审批 → 不通过抛 `E_PERMISSION`
-2. **注册表分发**：按 `tool_call.tool` 查 `ToolSpec` + 实现函数
-3. **超时兜底**：按 `ToolSpec.timeout_s` 线程池执行，超时抛 `E_TIMEOUT`
-4. **结果回填**：`tool_call.result = impl(**args)`
+## 安全机制
 
-安全逻辑（权限 / 沙箱 / 审批）完全在门卫，工具实现只做纯逻辑。
+### 路径沙箱（文件类工具）
+`file_read` / `file_list` / `file_write` / `file_edit` / `code_search` 的 `path` 参数
+经 `ToolGatekeeper._check_sandbox_path` 校验：`Path.resolve()` 必须落在 `WORKSPACE_DIR` 内，
+防止路径穿越越权读写系统目录。
 
----
+### URL 安全校验（web 类工具）
+`web_fetch` 的 `url` 参数经 `ToolGatekeeper._check_url_safety` → `url_guard.validate_url`：
+1. scheme 仅允许 `http` / `https`；
+2. 阻断云元数据端点 `169.254.169.254`；
+3. hostname 解析为 IP 后禁止私有/保留/环回/链路本地/组播网段；
+4. 可选域名白名单（默认空 = 允许所有公共域名）。
 
-## file_read
+`web_search` 的 URL 在实现内部构造（DuckDuckGo 固定 API），门卫跳过 URL 校验。
 
-| 项 | 值 |
-|----|----|
-| **名称** | `file_read` |
-| **用途** | 读取白名单目录内指定文件的文本内容（UTF-8） |
-| **风险等级** | `low` |
-| **成本带** | `low` |
-| **超时** | 10s |
-| **授权角色** | `operator` |
-| **审批要求** | 否 |
-| **实现文件** | `agent_builder/tools/impl/file_read.py` |
+### 高风险审批
+`file_write` 列入 `operator.high_risk_tools`，所有写操作必须 `approval.granted_by` 非空，
+否则门卫拒绝（E_PERMISSION，永不重试）。
 
-### 参数
+## 工具规格详情
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `path` | string | 是 | 要读取的文件路径（必须在白名单 `WORKSPACE_DIR` 内） |
+### file_read
+- **参数**：`path` (string, required)
+- **输出**：文件文本内容；超过 200,000 字符截断
+- **错误**：`E_VALIDATION`（不存在/非文件/二进制）、`E_TOOL`（读取失败）
 
-### 输出
+### file_list
+- **参数**：`path` (string, required)
+- **输出**：每行 `[DIR] name/` 或 `[FILE] name (N bytes)`；超过 500 条目截断
+- **错误**：`E_VALIDATION`（不存在/非目录）、`E_TOOL`（列目录失败）
 
-文件文本内容（字符串）。超过 `MAX_OUTPUT_CHARS`（200,000 字符）时截断并附 `…[已截断，原文 N 字符]` 标记。
+### code_search
+- **参数**：`path` (string, required)、`pattern` (string, required)、`max_results` (int, default 200)
+- **输出**：每行 `file:line:content`；超过 max_results 截断
+- **依赖**：系统需安装 ripgrep（`rg`）
+- **错误**：`E_VALIDATION`（参数非法）、`E_TOOL`（rg 不可用/超时/执行错误）
 
-### 失败映射
+### file_write
+- **参数**：`path` (string, required)、`content` (string, required)、`overwrite` (bool, default false)
+- **输出**：`wrote <path> (<N> chars)`
+- **审批**：所有写操作均需审批（high_risk_tools）
+- **错误**：`E_VALIDATION`（参数非法/文件已存在未授权覆盖/内容超长）、`E_TOOL`（写入失败）
 
-| 场景 | 错误码 | 说明 |
-|------|--------|------|
-| 路径为空 / 缺少 path | `E_PERMISSION` | 门卫沙箱校验拦截 |
-| 路径超出白名单目录 | `E_PERMISSION` | 门卫 `realpath` 校验拦截 |
-| 角色未授权 / 工具未在白名单 | `E_PERMISSION` | 门卫权限矩阵拦截 |
-| 文件不存在 | `E_VALIDATION` | 实现层校验 |
-| 路径不是文件（目录等） | `E_VALIDATION` | 实现层校验 |
-| 非 UTF-8 文本（二进制） | `E_TOOL` | `UnicodeDecodeError` 映射 |
-| 读取 IO 失败 | `E_TOOL` | `OSError` 映射 |
-| 执行超时 | `E_TIMEOUT` | 注册表线程池兜底 |
+### web_fetch
+- **参数**：`url` (string, required)、`timeout` (float, default 20s)、`max_chars` (int, default 100,000)
+- **输出**：页面文本内容；超过 max_chars 截断
+- **错误**：`E_VALIDATION`（参数非法）、`E_TOOL`（HTTP/网络/解码错误）、`E_PERMISSION`（URL 安全校验失败）
 
-### 示例调用
-
-```python
-from pathlib import Path
-from agent_builder.contracts.schemas import RolePerm, ToolCall
-from agent_builder.tools import ToolGatekeeper, registry
-
-workspace = Path("/your/workspace")
-perms = {"operator": RolePerm(role="operator", allowed_tools=["file_read"])}
-gk = ToolGatekeeper(perms, workspace_dir=workspace, correlation_id="c-demo")
-
-call = ToolCall(
-    audit_id="a-1",
-    role="operator",
-    tool="file_read",
-    args={"path": str(workspace / "notes.txt")},
-)
-registry.execute(gk, call)
-print(call.result)  # 文件内容
-```
-
----
-
-## file_list
-
-| 项 | 值 |
-|----|----|
-| **名称** | `file_list` |
-| **用途** | 列出白名单目录内指定路径下的文件和子目录 |
-| **风险等级** | `low` |
-| **成本带** | `low` |
-| **超时** | 10s |
-| **授权角色** | `operator` |
-| **审批要求** | 否 |
-| **实现文件** | `agent_builder/tools/impl/file_list.py` |
-
-### 参数
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `path` | string | 是 | 要列出的目录路径（必须在白名单 `WORKSPACE_DIR` 内） |
-
-### 输出
-
-每行一个条目，格式 `[DIR]  name/` 或 `[FILE] name (N bytes)`。目录在前、文件在后，各自按名称排序。空目录返回空字符串。超过 `MAX_ENTRIES`（500 条目）时截断并附 `…[已截断，共 N 条目，仅显示前 M 条]` 标记。
-
-### 失败映射
-
-| 场景 | 错误码 | 说明 |
-|------|--------|------|
-| 路径为空 / 缺少 path | `E_PERMISSION` | 门卫沙箱校验拦截 |
-| 路径超出白名单目录 | `E_PERMISSION` | 门卫 `realpath` 校验拦截 |
-| 角色未授权 / 工具未在白名单 | `E_PERMISSION` | 门卫权限矩阵拦截 |
-| 路径不存在 | `E_VALIDATION` | 实现层校验 |
-| 路径不是目录（文件等） | `E_VALIDATION` | 实现层校验 |
-| 列目录 IO 失败 | `E_TOOL` | `OSError` 映射 |
-| 执行超时 | `E_TIMEOUT` | 注册表线程池兜底 |
-
-### 示例调用
-
-```python
-from pathlib import Path
-from agent_builder.contracts.schemas import RolePerm, ToolCall
-from agent_builder.tools import ToolGatekeeper, registry
-
-workspace = Path("/your/workspace")
-perms = {"operator": RolePerm(role="operator", allowed_tools=["file_list"])}
-gk = ToolGatekeeper(perms, workspace_dir=workspace, correlation_id="c-demo")
-
-call = ToolCall(
-    audit_id="a-1",
-    role="operator",
-    tool="file_list",
-    args={"path": str(workspace)},
-)
-registry.execute(gk, call)
-print(call.result)
-# [DIR]  subdir/
-# [FILE] a.txt (3 bytes)
-# [FILE] b.txt (3 bytes)
-```
+### web_search
+- **参数**：`query` (string, required)、`max_results` (int, default 10, 上限 50)
+- **输出**：每行 `[N] title — abstract (url)`；超过 max_results 截断
+- **API**：DuckDuckGo Instant Answer API（免 key）
+- **错误**：`E_VALIDATION`（参数非法）、`E_TOOL`（HTTP/网络/JSON 解析错误）

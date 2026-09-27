@@ -12,9 +12,16 @@ from agent_builder.contracts.schemas import RolePerm
 DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
     "operator": RolePerm(
         role="operator",
-        allowed_tools=["file_read", "file_list"],
-        high_risk_tools=[],
-        notes="操作者：可读取白名单内文件和列目录；无写权限",
+        allowed_tools=[
+            "file_read",
+            "file_list",
+            "code_search",
+            "file_write",
+            "web_fetch",
+            "web_search",
+        ],
+        high_risk_tools=["file_write"],
+        notes="操作者：可读/列白名单文件、代码搜索、抓取/搜索网页；写文件需审批",
     ),
 }
 
