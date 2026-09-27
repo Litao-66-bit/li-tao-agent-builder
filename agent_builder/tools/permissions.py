@@ -23,9 +23,21 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
             "sandbox_run",
             "test_run",
             "data_query",
+            "plan_validate",
+            "memory_read",
         ],
         high_risk_tools=["file_write"],
-        notes="操作者：可读/列白名单文件、代码搜索、抓取/搜索网页、校验引用、沙箱执行、跑测试、读数据；写文件需审批",
+        notes="操作者：可读/列白名单文件、代码搜索、抓取/搜索网页、校验引用、沙箱执行、跑测试、读数据、校验计划DAG、只读记忆；写文件需审批",
+    ),
+    "memory_manager": RolePerm(
+        role="memory_manager",
+        allowed_tools=[
+            "memory_read",
+            "memory_write",
+            "memory_forget",
+        ],
+        high_risk_tools=[],
+        notes="记忆管家：读写/清理记忆；敏感信息加密存储（专用角色，operator 不可写/清记忆）",
     ),
 }
 

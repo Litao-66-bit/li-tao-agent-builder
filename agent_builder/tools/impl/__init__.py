@@ -7,6 +7,10 @@ from agent_builder.tools.impl import (
     file_list,  # noqa: F401  导入触发注册
     file_read,  # noqa: F401  导入触发注册
     file_write,  # noqa: F401  导入触发注册
+    memory_forget,  # noqa: F401  导入触发注册
+    memory_read,  # noqa: F401  导入触发注册
+    memory_write,  # noqa: F401  导入触发注册
+    plan_validate,  # noqa: F401  导入触发注册
     sandbox_run,  # noqa: F401  导入触发注册
     test_run,  # noqa: F401  导入触发注册
     web_fetch,  # noqa: F401  导入触发注册
