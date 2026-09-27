@@ -34,6 +34,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mock", action="store_true", help="使用 MockClient（无需 API Key 的演示模式）")
     parser.add_argument("--max-calls", type=int, default=50, help="单任务 LLM 调用预算上限（默认 50，超限 E_COST 中止）")
     parser.add_argument("--timeout", type=float, default=60.0, help="模型调用超时秒数，仅 DeepSeek 生效（默认 60）")
+    parser.add_argument(
+        "--db",
+        type=str,
+        default=None,
+        help="状态持久化 SQLite 路径（默认 <项目根>/.agent-builder/state.db；加 --no-persist 关闭）",
+    )
+    parser.add_argument("--no-persist", action="store_true", help="不持久化状态（进程退出即丢中断点，适合一次性演示）")
     args = parser.parse_args(argv)
 
     requirement = args.requirement
@@ -73,13 +80,23 @@ def main(argv: list[str] | None = None) -> int:
             correlation_id=correlation_id,
         )
 
-    # ── 运行最小闭环 ─────────────────────────────────────────────
+    # ── 运行最小闭环（P1-1：默认 SQLite 持久化检查点）────────────
     from langgraph.types import Command
 
     from agent_builder.graph.build import build_graph
 
     config = {"configurable": {"thread_id": task_id}}
-    graph = build_graph(llm)
+
+    if args.no_persist or args.db is None:
+        graph = build_graph(llm)
+    else:
+        from pathlib import Path
+
+        from agent_builder.graph.build import build_persistent_graph
+
+        db_path = args.db or str(Path(__file__).resolve().parent.parent / ".agent-builder" / "state.db")
+        graph, _ = build_persistent_graph(llm, db_path)
+        print(f"[persist] 状态持久化到 {db_path}（进程重启后可恢复中断点）")
 
     try:
         first = graph.invoke(

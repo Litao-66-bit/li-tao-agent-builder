@@ -17,6 +17,7 @@ from langgraph.types import interrupt
 
 from agent_builder.contracts.errors import AgentError, model_error, validation_error
 from agent_builder.contracts.schemas import Plan, Step
+from agent_builder.facts.verifier import verify as fact_verify
 from agent_builder.llm.client import LLMClient
 from agent_builder.tools.guard import sanitize_tool_result
 
@@ -150,7 +151,7 @@ def execute_node(state: dict[str, Any], llm: LLMClient) -> dict[str, Any]:
     return {"results": results, "steps": list(steps.values())}
 
 
-# ── 验证者：确定性完整性校验 ────────────────────────────────────
+# ── 验证者：完整性 + 事实核验 ──────────────────────────────────
 
 
 def verify_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -162,7 +163,9 @@ def verify_node(state: dict[str, Any]) -> dict[str, Any]:
             source="node.verify",
             correlation_id=state.get("correlation_id", "c-unknown"),
         )
-    return {}
+    # P1-3 事实核验：逐步骤做来源可溯性检查（标记不拦截）。
+    verification = {sid: fact_verify(text) for sid, text in results.items()}
+    return {"verification": verification}
 
 
 # ── 汇报员：汇总产出最终报告 ────────────────────────────────────
@@ -177,6 +180,11 @@ def summarize_node(state: dict[str, Any], llm: LLMClient) -> dict[str, Any]:
             source="node.summarize",
             correlation_id=state.get("correlation_id", "c-unknown"),
         )
+    # P1-3：报告尾部附事实核验提示（来源可溯性）。
+    verification = state.get("verification", {})
+    unverified = [sid for sid, v in verification.items() if isinstance(v, dict) and v.get("status") == "unverified"]
+    if unverified:
+        report += "\n\n⚠️ 核验提示：以下步骤包含缺少来源标注的断言，建议人工复核：" + "、".join(unverified)
     return {"report": report}
 
 

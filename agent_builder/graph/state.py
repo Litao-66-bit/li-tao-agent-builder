@@ -13,6 +13,7 @@ class AgentState(TypedDict, total=False):
     - steps: 分解器产出的步骤列表（Pydantic Step）
     - plan: 调度器产出的执行计划
     - results: step_id → 执行结果文本
+    - verification: step_id → 事实核验结果（P1-3，来源可溯性）
     - report: 最终报告
     - error: 失败信息（用于 CLI 展示）
     """
@@ -23,6 +24,7 @@ class AgentState(TypedDict, total=False):
     steps: list[Step]
     plan: Plan
     results: dict[str, str]
+    verification: dict[str, dict]
     report: str | None
     error: str | None
 

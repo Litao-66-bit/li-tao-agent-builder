@@ -51,6 +51,7 @@ data/raw/
 *.db
 *.sqlite
 *.sqlite3
+.agent-builder/
 
 # ===== 工具运行时临时文件 =====
 .tmp-tool-results/
