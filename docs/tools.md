@@ -17,6 +17,16 @@ Agent Builder 已注册工具一览。所有工具经 `ToolGatekeeper` 唯一出
 | `sandbox_run` | 沙箱内执行命令 | medium | 否 | 工作目录沙箱；禁网络命令 + Linux netns | 60s |
 | `test_run` | 跑 pytest / 抓文档 | low | 否 | 路径沙箱 or URL 校验（自动识别） | 120s |
 | `data_query` | 读 CSV/JSON 数据 | low | 否 | 白名单目录（path 沙箱） | 15s |
+| `plan_validate` | 校验步骤 DAG（格式/环依赖） | low | 否 | 纯计算，无 IO | 10s |
+| `memory_read` | 检索记忆（短期/长期） | low | 否 | 只读记忆存储 | 10s |
+
+## memory_manager 角色可用工具
+
+| 工具 | 用途 | 风险 | 审批 | 数据边界 | 超时 |
+|---|---|---|---|---|---|
+| `memory_read` | 检索记忆（短期/长期） | low | 否 | 只读记忆存储 | 10s |
+| `memory_write` | 写入记忆 | low | 否 | 记忆存储；敏感信息 base64 编码 | 10s |
+| `memory_forget` | 遗忘/清理过期记忆 | low | 否 | 记忆存储 | 10s |
 
 ## 安全机制
 
@@ -43,6 +53,11 @@ Agent Builder 已注册工具一览。所有工具经 `ToolGatekeeper` 唯一出
 
 `web_search` 的 URL 在实现内部构造（DuckDuckGo 固定 API），门卫跳过 URL 校验。
 `citation_check` 的 URL 在实现内部调 `url_guard.validate_url`（双层防护）。
+
+### 记忆存储加密（memory 类工具）
+`memory_write` 的 `sensitive=true` 时，content 经 `memory_store.encode_sensitive` 做 base64 编码后写入存储文件，
+存储层不落明文（防文件被直接读取时泄露敏感信息）。`memory_read` 读取时解码显示原文，并加 `[SENSITIVE]` 标记。
+`memory_write` / `memory_forget` 仅授权 `memory_manager` 角色（`operator` 不可写/清记忆，最小权限原则）。
 
 ### 高风险审批
 `file_write` 列入 `operator.high_risk_tools`，所有写操作必须 `approval.granted_by` 非空，
@@ -106,3 +121,36 @@ Agent Builder 已注册工具一览。所有工具经 `ToolGatekeeper` 唯一出
 - **输出**：CSV → 制表符分隔行；JSON → 格式化文本（数组截断到 limit 条）
 - **格式**：自动检测 `.csv` / `.json` 后缀
 - **错误**：`E_VALIDATION`（path 为空/limit 非法/文件不存在/格式不支持）、`E_TOOL`（读取/解析失败）
+
+### plan_validate
+- **参数**：`steps` (array, required)、`order` (array of strings, required)、`parallel_groups` (array of arrays, optional)
+- **输出**：`DAG 校验通过：N 个步骤，M 个并行组，无环依赖`
+- **校验**：步骤格式（id/action 非空、id 不重复、depends_on 为列表）→ 引用完整性（order/parallel_groups/depends_on 引用的步骤存在）→ 环检测（DFS 三色标记法）
+- **错误**：`E_VALIDATION`（steps/order 为空/超限/格式非法/引用缺失/DAG 含环）
+- **角色**：operator
+
+### memory_read
+- **参数**：`query` (string, default "")、`scope` (enum short/long/all, default all)、`limit` (int, default 10, 上限 100)
+- **输出**：每行 `[scope] key — content (ts)`；敏感条目加 `[SENSITIVE]` 前缀并解码显示原文；无匹配返回 `(no memory found)`
+- **存储**：JSON 文件（`~/.li-tao-agent/memory.json`，可通过 `AGENT_MEMORY_FILE` 环境变量覆盖）
+- **错误**：`E_VALIDATION`（scope/limit 非法）、`E_TOOL`（存储读写失败）
+- **角色**：operator（只读）、memory_manager
+
+### memory_write
+- **参数**：`key` (string, required)、`content` (string, required)、`scope` (enum short/long, default long)、`sensitive` (bool, default false)
+- **输出**：`stored <key> (<scope>, sensitive=<bool>)`
+- **加密**：`sensitive=true` 时 content base64 编码存储（存储层不落明文）
+- **覆盖**：同 scope 内同 key 的旧条目自动覆盖
+- **错误**：`E_VALIDATION`（key/content 为空/scope 非法/content 超长）、`E_TOOL`（存储读写失败）
+- **角色**：memory_manager（专用，operator 不可调用）
+
+### memory_forget
+- **参数**：`key` (string, default "")、`scope` (enum short/long/all, default all)、`expired_only` (bool, default true)
+- **输出**：`forgot <N> entries`
+- **清理规则**：
+  - 指定 `key`：只删该 key 的条目（忽略 expired_only）
+  - 未指定 `key` + `expired_only=true`：只清过期的 short 记忆（超过 `DEFAULT_SHORT_TTL`=3600s）；long 记忆无 TTL 不清理
+  - 未指定 `key` + `expired_only=false`：清空该 scope 全部
+  - 无时间戳/时间戳损坏的条目不清理（数据保护）
+- **错误**：`E_VALIDATION`（scope 非法）、`E_TOOL`（存储读写失败）
+- **角色**：memory_manager（专用，operator 不可调用）
