@@ -51,6 +51,11 @@ cd li-tao-agent-builder
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
+# 推荐：按锁定版本安装（与 CI 一致，可复现）
+pip install -r requirements.lock
+pip install -e . --no-deps
+
+# 或：按范围安装开发版（会解析最新兼容版本）
 pip install -e ".[dev]"
 ```
 
