@@ -79,7 +79,7 @@ class ToolGatekeeper:
             )
 
         # 文件类工具：沙箱路径校验。
-        if tool_call.tool in ("file_write", "file_read", "file_edit"):
+        if tool_call.tool in ("file_write", "file_read", "file_edit", "file_list"):
             self._check_sandbox_path(tool_call)
 
         tool_call.status = "executed"
