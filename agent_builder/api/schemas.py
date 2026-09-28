@@ -50,6 +50,16 @@ class DecomposeResponse(BaseModel):
     pending_questions: list[str] = Field(default_factory=list)
 
 
+class FileNode(BaseModel):
+    """文件树节点。"""
+
+    name: str
+    type: str  # "dir" | "file"
+    path: str
+    size: int | None = None  # 文件大小（字节），目录为 None
+    children: list[FileNode] = Field(default_factory=list)
+
+
 class ErrorResponse(BaseModel):
     """错误响应。"""
 
@@ -62,6 +72,7 @@ class ErrorResponse(BaseModel):
 __all__ = [
     "DecomposeResponse",
     "ErrorResponse",
+    "FileNode",
     "InterruptRequest",
     "PlanRequest",
     "TaskCreateRequest",

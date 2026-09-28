@@ -96,6 +96,51 @@ function appendApproval(questions) {
   document.getElementById('rejectBtn').onclick = handleReject;
 }
 
+/* ──────────────── 文件树渲染 ──────────────── */
+
+/** 递归渲染文件树节点 */
+function renderFileTree(nodes, container, depth = 0) {
+  nodes.forEach(node => {
+    const div = document.createElement('div');
+    div.className = `tree-node depth-${depth}`;
+    const icon = node.type === 'dir' ? '📁' : '📄';
+    const sizeLabel = node.type === 'file' && node.size != null
+      ? ` <span style="color:#8b949e;font-size:10px;">${formatSize(node.size)}</span>`
+      : '';
+    div.innerHTML = `${icon} ${node.name}${sizeLabel}`;
+    div.title = node.path;
+    container.appendChild(div);
+    if (node.children && node.children.length > 0) {
+      renderFileTree(node.children, container, depth + 1);
+    }
+  });
+}
+
+/** 格式化文件大小 */
+function formatSize(bytes) {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+/** 加载并渲染工作区文件树 */
+async function loadFileTree() {
+  const tree = document.querySelector('.file-tree');
+  if (!tree) return;
+  tree.innerHTML = '<div class="tree-node depth-0">⟳ 加载中…</div>';
+  try {
+    const nodes = await api.getWorkspaceFiles();
+    tree.innerHTML = '';
+    if (nodes.length === 0) {
+      tree.innerHTML = '<div class="tree-node depth-0">（工作区为空）</div>';
+      return;
+    }
+    renderFileTree(nodes, tree);
+  } catch (err) {
+    tree.innerHTML = `<div class="tree-node depth-0" style="color:#cf222e;">❌ ${err.message}</div>`;
+  }
+}
+
 /* ──────────────── 业务流程 ──────────────── */
 
 /** 发送需求 → 创建任务 → 自动分解 */
@@ -218,7 +263,10 @@ document.querySelector('.new-project-btn').addEventListener('click', () => {
   document.getElementById('msgInput').focus();
 });
 
-// 初始化：检测后端连通性
+// 上传按钮 → 刷新文件树
+document.querySelector('.file-upload-btn')?.addEventListener('click', loadFileTree);
+
+// 初始化：检测后端连通性 + 加载文件树
 (async () => {
   try {
     await api.health();
@@ -227,4 +275,5 @@ document.querySelector('.new-project-btn').addEventListener('click', () => {
     appendMessage('agent', `⚠️ ${err.message}`);
   }
   updateStageBar('received');
+  loadFileTree();
 })();

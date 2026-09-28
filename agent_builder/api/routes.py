@@ -1,8 +1,9 @@
-"""HTTP 路由 —— 薄包装 Conductor 状态机 + Decomposer。"""
+"""HTTP 路由 —— 薄包装 Conductor 状态机 + Decomposer + 工作区文件树。"""
 
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from agent_builder.api.deps import build_llm_client_or_none, get_store
 from agent_builder.api.schemas import (
     DecomposeResponse,
+    FileNode,
     InterruptRequest,
     PlanRequest,
     TaskCreateRequest,
@@ -18,8 +20,51 @@ from agent_builder.api.schemas import (
 from agent_builder.api.store import InMemoryTaskStore
 from agent_builder.contracts.errors import AgentError
 from agent_builder.roles.decomposer import Decomposer
+from agent_builder.tools.gatekeeper import WORKSPACE_DIR
 
 router = APIRouter()
+
+# 文件树最大递归深度（防止深层目录遍历开销过大）。
+MAX_TREE_DEPTH = 3
+
+
+def _resolve_workspace_dir() -> Path:
+    """解析工作区目录。
+
+    优先使用 gatekeeper.WORKSPACE_DIR；若该路径在当前环境不存在
+    （如 Windows 开发环境），则回退到项目根目录。
+    """
+    if WORKSPACE_DIR.exists():
+        return WORKSPACE_DIR.resolve()
+    # 回退：项目根目录（agent_builder/api/routes.py → 上溯 2 层 = li-tao-agent-builder/）。
+    fallback = Path(__file__).resolve().parents[2]
+    return fallback
+
+
+def _build_file_tree(root: Path, current: Path, depth: int = 0) -> list[FileNode]:
+    """递归构建文件树（限深 MAX_TREE_DEPTH）。"""
+    nodes: list[FileNode] = []
+    if depth >= MAX_TREE_DEPTH:
+        return nodes
+    try:
+        entries = sorted(current.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+    except (PermissionError, OSError):
+        return nodes
+    for entry in entries:
+        # 跳过隐藏目录（.git、.venv 等）和 __pycache__。
+        if entry.name.startswith(".") or entry.name == "__pycache__":
+            continue
+        rel_path = str(entry.relative_to(root)).replace("\\", "/")
+        if entry.is_dir():
+            children = _build_file_tree(root, entry, depth + 1)
+            nodes.append(FileNode(name=entry.name, type="dir", path=rel_path, children=children))
+        else:
+            try:
+                size = entry.stat().st_size
+            except OSError:
+                size = None
+            nodes.append(FileNode(name=entry.name, type="file", path=rel_path, size=size))
+    return nodes
 
 
 def _to_task_response(entry_or_conductor: Any, task_id: str) -> TaskResponse:
@@ -48,6 +93,13 @@ def _to_task_response(entry_or_conductor: Any, task_id: str) -> TaskResponse:
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/workspace/files", response_model=list[FileNode])
+def list_workspace_files() -> list[FileNode]:
+    """列出工作区文件树（限深 3 层，跳过隐藏目录和 __pycache__）。"""
+    ws_dir = _resolve_workspace_dir()
+    return _build_file_tree(ws_dir, ws_dir)
 
 
 @router.post("/tasks", response_model=TaskResponse, status_code=201)

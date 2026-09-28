@@ -9,6 +9,7 @@
  *   POST   /tasks/{id}/interrupt 中断 → interrupted
  *   POST   /tasks/{id}/resume    恢复 → executing
  *   POST   /tasks/{id}/abort     放弃 → failed
+ *   GET    /workspace/files      工作区文件树
  * ============================================================ */
 
 const API_BASE = 'http://localhost:8000';
@@ -46,4 +47,5 @@ const api = {
   interruptTask: (id, reason = 'user_stop') => api.request('POST', `/tasks/${id}/interrupt`, { reason }),
   resumeTask: (id) => api.request('POST', `/tasks/${id}/resume`),
   abortTask: (id) => api.request('POST', `/tasks/${id}/abort`),
+  getWorkspaceFiles: () => api.request('GET', '/workspace/files'),
 };
