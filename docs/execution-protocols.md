@@ -149,3 +149,65 @@ conductor 确认需求后调用（TaskState.status = PLANNING）。
 #### 完成标志
 
 输出步骤 DAG（JSON），无未定义步骤（pending_questions 为空或已转交 conductor）。
+
+---
+
+## Scheduler（调度器）
+
+### 角色规格
+
+| 属性 | 值 |
+|---|---|
+| 角色名 | `scheduler` |
+| 层级 | executor（主架构·规划层） |
+| 使命 | 步骤 DAG → 执行计划（顺序 + 并行组 + 失败预案） |
+| 服务对象 | decomposer（上游）→ 用户（确认）→ 路由者（下游） |
+| 触发时机 | 拿到分解器的步骤 DAG 后 |
+| 交付物 | Plan（order + parallel_groups + fallback） |
+
+### 授权清单
+
+| 工具 | 用途 | 风险 |
+|---|---|---|
+| `plan_validate` | 校验生成的计划 DAG | low |
+| `config_read` | 读配置（资源上限等） | low |
+| `memory_read` | 读历史经验辅助预判失败 | low |
+| `audit_log` | 写审计日志 | low |
+
+**边界声明**：只调度不执行；环依赖返回分解器修正。
+
+### 执行协议
+
+#### 触发条件
+decomposer 产出步骤 DAG 后调用。
+
+#### 分步流程
+
+```
+1. 接收 DecomposeResult（步骤 DAG）
+2. 环依赖检测 → 有环返回修正请求
+3. 拓扑排序分层 → 每层不超过 MAX_PARALLEL（资源上限裁剪）
+4. 并行收益判断 → 组内 2 个快速操作改顺序（收益 < 协调成本）
+5. 失败预案 → 每步标 skip/retry（写操作不重试防损坏；测试失败跳过不阻塞）
+6. 输出 Plan → 展示给用户确认
+```
+
+#### 异常处理
+
+| 异常 | 处理路径 |
+|---|---|
+| 环依赖 | 返回分解器要求修正（pending_questions） |
+| 无步骤 | 返回待确认（等 LLM 拆分） |
+| 资源上限冲突 | 优先保关键路径（裁剪到 MAX_PARALLEL） |
+
+#### 交接
+
+| 接收者 | 交付物 | 格式 |
+|---|---|---|
+| 用户 | 执行计划 | Plan（order + parallel_groups + fallback） |
+| 路由者 | 已确认计划 | Plan（confirmed_by_user=true） |
+| 分解器 | 修正请求 | pending_questions（环依赖） |
+
+#### 完成标志
+
+输出执行计划（顺序 + 并行组 + 失败预案），展示给用户确认。

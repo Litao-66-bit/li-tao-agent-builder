@@ -2,5 +2,6 @@
 
 from agent_builder.roles.conductor import Conductor
 from agent_builder.roles.decomposer import Decomposer
+from agent_builder.roles.scheduler import Scheduler
 
-__all__ = ["Conductor", "Decomposer"]
+__all__ = ["Conductor", "Decomposer", "Scheduler"]

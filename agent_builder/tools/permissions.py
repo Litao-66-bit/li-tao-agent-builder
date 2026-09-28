@@ -33,6 +33,17 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
         high_risk_tools=[],
         notes="分解器：拆需求为步骤DAG、去重/标注依赖/分组/歧义检查；只规划不执行",
     ),
+    "scheduler": RolePerm(
+        role="scheduler",
+        allowed_tools=[
+            "plan_validate",
+            "config_read",
+            "memory_read",
+            "audit_log",
+        ],
+        high_risk_tools=[],
+        notes="调度器：步骤DAG→执行计划（拓扑排序+并行分组+失败预案）；只调度不执行",
+    ),
     "operator": RolePerm(
         role="operator",
         allowed_tools=[
