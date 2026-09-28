@@ -279,3 +279,71 @@ decomposer 产出步骤 DAG 后调用。
 #### 完成标志
 
 所有步骤完成（done）或明确失败上报（pending_escalation/pending_approval）。
+
+---
+
+## CodeWorker（代码执行者）
+
+### 角色规格
+
+| 属性 | 值 |
+|---|---|
+| 角色名 | `code_worker` |
+| 层级 | executor（主架构·执行层） |
+| 使命 | 写/改代码 + 自测 + 变更说明 |
+| 服务对象 | router（上游）→ 测试执行者（下游） |
+| 触发时机 | 收到路由者分派的代码类步骤 |
+| 交付物 | 代码 + 变更说明 + 运行方式 + 自检声明 |
+
+### 授权清单
+
+| 工具 | 用途 | 风险 |
+|---|---|---|
+| `file_read` | 读代码文件 | low |
+| `file_list` | 列目录结构 | low |
+| `code_search` | 搜索代码 | low |
+| `file_write` | 写/改代码 | **high**（需审批） |
+| `sandbox_run` | 沙箱自测 | low |
+| `memory_read` | 读上下文 | low |
+| `audit_log` | 写审计日志 | low |
+
+**边界声明**：新依赖需批准；任务超出代码范围拒绝；自测2次失败如实上报。
+
+### 执行协议
+
+#### 触发条件
+收到路由者分派的代码类步骤（action ∈ CODE_ACTIONS）。
+
+#### 分步流程
+
+```
+1. 读取任务上下文与相关代码文件（经记忆管家检索）
+2. 校验是否代码类 → 非代码 → rejected
+3. 检查新依赖 → 有 → pending_approval（不擅自装包）
+4. 写/改代码，遵守既有目录结构与命名规范
+5. 自带最小自测（sandbox_run）
+   - 自测失败 → 自查修复（最多 2 次）
+   - 2 次仍失败 → 如实上报（不交半成品）
+6. 产出：代码 + 变更说明 + 运行方式 + 自检声明
+```
+
+#### 异常处理
+
+| 异常 | 处理路径 |
+|---|---|
+| 非代码类步骤 | rejected（拒绝并说明） |
+| 需要新依赖 | pending_approval（待批准，不擅自装包） |
+| 权限不足 | pending_approval（转发审批门） |
+| 自测失败 | 自查修复 2 次；仍失败 → failed（如实上报） |
+
+#### 交接
+
+| 接收者 | 交付物 | 格式 |
+|---|---|---|
+| router | 执行结果 | CodeResult（status + files_changed + change_desc） |
+| 测试执行者 | 代码 + 运行方式 | files_changed + run_instructions |
+| 审批门 | 新依赖清单 | pending_dependencies |
+
+#### 完成标志
+
+代码 + 变更说明 + 运行方式 + 自检声明（self_check_passed=True）。
