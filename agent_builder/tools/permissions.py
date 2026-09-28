@@ -55,6 +55,19 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
         high_risk_tools=[],
         notes="路由者：匹配执行者+派发步骤+监控进度+回收产出；只路由不执行",
     ),
+    "proposer": RolePerm(
+        role="proposer",
+        allowed_tools=[
+            "memory_read",
+            "config_read",
+            "audit_log",
+            "metric_collect",
+            "diff_preview",
+            "file_read",
+        ],
+        high_risk_tools=[],
+        notes="方案生成者（副架构）：定位根因+最小改动方案；无根因不下方案；多根因拆分提案",
+    ),
     "auditor": RolePerm(
         role="auditor",
         allowed_tools=[
