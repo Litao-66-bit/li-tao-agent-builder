@@ -83,10 +83,15 @@ class ToolRegistry:
         timeout_s: float,
         tool_name: str,
     ) -> Any:
-        """线程池超时兜底（跨平台，不依赖 signal）。"""
+        """线程池超时兜底（跨平台，不依赖 signal）。
+
+        用 contextvars.copy_context() 将当前 contextvar 传递到子线程，
+        使 impl 内 current_correlation_id.get() 能取到门卫设置的值。
+        """
         cid = current_correlation_id.get()
+        ctx = contextvars.copy_context()
         with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(impl, **args)
+            future = pool.submit(ctx.run, impl, **args)
             try:
                 return future.result(timeout=timeout_s)
             except FuturesTimeout:
