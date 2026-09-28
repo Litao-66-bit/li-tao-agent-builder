@@ -44,6 +44,17 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
         high_risk_tools=[],
         notes="调度器：步骤DAG→执行计划（拓扑排序+并行分组+失败预案）；只调度不执行",
     ),
+    "router": RolePerm(
+        role="router",
+        allowed_tools=[
+            "plan_validate",
+            "config_read",
+            "audit_log",
+            "metric_collect",
+        ],
+        high_risk_tools=[],
+        notes="路由者：匹配执行者+派发步骤+监控进度+回收产出；只路由不执行",
+    ),
     "operator": RolePerm(
         role="operator",
         allowed_tools=[

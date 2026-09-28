@@ -211,3 +211,71 @@ decomposer 产出步骤 DAG 后调用。
 #### 完成标志
 
 输出执行计划（顺序 + 并行组 + 失败预案），展示给用户确认。
+
+---
+
+## Router（路由者）
+
+### 角色规格
+
+| 属性 | 值 |
+|---|---|
+| 角色名 | `router` |
+| 层级 | executor（主架构·执行层） |
+| 使命 | 匹配执行者 + 派发步骤 + 监控进度 + 回收产出 |
+| 服务对象 | scheduler（上游）→ 验证组（下游） |
+| 触发时机 | 执行计划获用户确认（EXECUTING 阶段） |
+| 交付物 | 执行结果集（RouteResult） |
+
+### 授权清单
+
+| 工具 | 用途 | 风险 |
+|---|---|---|
+| `plan_validate` | 校验计划格式 | low |
+| `config_read` | 读执行者配置 | low |
+| `audit_log` | 写审计日志 | low |
+| `metric_collect` | 采集执行指标 | low |
+
+**边界声明**：只路由不执行；失败重派 1 次；权限不足转发审批门。
+
+### 执行协议
+
+#### 触发条件
+执行计划获用户确认（Plan.confirmed_by_user=True）。
+
+#### 分步流程
+
+```
+1. 接收已确认的 Plan + steps
+2. 按步骤的 action 匹配执行者类型（EXECUTOR_MAP）
+3. 派发步骤 → executor_fn 执行（None 则只匹配不执行）
+4. 监控进度 → 超时标记失败重派
+5. 回收产出 → 汇总执行结果集
+6. 分类处理：
+   - 成功 → done
+   - 失败 + retries < max → 重派
+   - 失败 + retries >= max → 上报总指挥（pending_escalation）
+   - 权限不足 → 转发审批门（pending_approval）
+```
+
+#### 异常处理
+
+| 异常 | 处理路径 |
+|---|---|
+| 步骤失败 | 重派 1 次；仍失败 → 上报总指挥 |
+| 执行者超时 | 标记失败重派 |
+| 权限不足 | 转发审批门请求用户（pending_approval） |
+| 类型不明 | 默认派给 general_executor |
+| 无匹配执行者 | 上报总指挥 |
+
+#### 交接
+
+| 接收者 | 交付物 | 格式 |
+|---|---|---|
+| 验证组 | 执行结果集 | RouteResult（results + pending_escalation + pending_approval） |
+| conductor | 上报清单 | pending_escalation（无匹配/重派失败） |
+| 审批门 | 审批请求 | pending_approval（权限不足的步骤） |
+
+#### 完成标志
+
+所有步骤完成（done）或明确失败上报（pending_escalation/pending_approval）。
