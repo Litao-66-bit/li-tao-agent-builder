@@ -8,6 +8,7 @@ from agent_builder.roles.doc_worker import DocWorker
 from agent_builder.roles.router import Router
 from agent_builder.roles.scheduler import Scheduler
 from agent_builder.roles.searcher import Searcher
+from agent_builder.roles.test_runner import TestRunner
 
 __all__ = [
     "CodeWorker",
@@ -18,4 +19,5 @@ __all__ = [
     "Router",
     "Scheduler",
     "Searcher",
+    "TestRunner",
 ]

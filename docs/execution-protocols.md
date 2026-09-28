@@ -590,3 +590,68 @@ decomposer 产出步骤 DAG 后调用。
 ### 完成标志
 
 工具结果（executed）或拒绝原因（denied）。
+
+---
+
+## TestRunner（测试执行者）
+
+### 角色规格
+
+| 属性 | 值 |
+|---|---|
+| 角色名 | `test_runner` |
+| 层级 | executor（主架构·验证层） |
+| 使命 | 跑用例 + 权限边界检查 + 测试报告 |
+| 服务对象 | router（上游）→ conductor（决定返工或放行） |
+| 触发时机 | 收到待验证产出 |
+| 交付物 | 测试报告（passed/failed + 可复现日志） |
+
+### 授权清单
+
+| 工具 | 用途 | 风险 |
+|---|---|---|
+| `test_run` | 跑测试 | low |
+| `sandbox_run` | 沙箱内执行 | low |
+| `file_read` | 读测试代码 | low |
+| `code_search` | 搜索代码 | low |
+| `memory_read` | 读上下文 | low |
+| `audit_log` | 写审计日志 | low |
+| `citation_check` | 校验来源 | low |
+
+**边界声明**：不修改被测代码；失败打回执行层；环境异常重试 1 次。
+
+### 执行协议
+
+#### 触发条件
+收到待验证产出（action ∈ TEST_ACTIONS）。
+
+#### 分步流程
+
+```
+1. 按验收标准写/跑用例（沙箱内）
+2. 校验是否验证类 → 非验证 → rejected
+3. 权限边界检查：路径、命令白名单是否被踩
+4. 输出测试报告（passed/failed + 可复现日志）
+5. 失败 → 附失败原因与日志打回执行层（不修改被测代码）
+6. 环境异常 → 重试 1 次，仍异常 → env_failure 上报
+```
+
+#### 异常处理
+
+| 异常 | 处理路径 |
+|---|---|
+| 非验证类步骤 | rejected（拒绝并说明） |
+| 测试失败 | failed（附失败原因与日志，打回执行层） |
+| 权限不足 | env_failure（不重试） |
+| 环境异常 | 重试 1 次；仍异常 → env_failure（上报） |
+
+#### 交接
+
+| 接收者 | 交付物 | 格式 |
+|---|---|---|
+| conductor | 测试报告 | TestReport（passed/failed + repro_log） |
+| 执行层 | 失败原因 + 日志 | cases（name + status + log） |
+
+#### 完成标志
+
+测试报告（passed/failed 计数 + 可复现日志）。

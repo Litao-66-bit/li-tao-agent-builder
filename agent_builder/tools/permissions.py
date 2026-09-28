@@ -55,6 +55,20 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
         high_risk_tools=[],
         notes="路由者：匹配执行者+派发步骤+监控进度+回收产出；只路由不执行",
     ),
+    "test_runner": RolePerm(
+        role="test_runner",
+        allowed_tools=[
+            "test_run",
+            "sandbox_run",
+            "file_read",
+            "code_search",
+            "memory_read",
+            "audit_log",
+            "citation_check",
+        ],
+        high_risk_tools=[],
+        notes="测试执行者：跑用例+权限边界检查+测试报告；不修改被测代码；环境异常重试1次",
+    ),
     "searcher": RolePerm(
         role="searcher",
         allowed_tools=[
