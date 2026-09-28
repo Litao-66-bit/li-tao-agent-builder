@@ -6,6 +6,7 @@ from agent_builder.roles.data_analyst import DataAnalyst
 from agent_builder.roles.decomposer import Decomposer
 from agent_builder.roles.doc_worker import DocWorker
 from agent_builder.roles.fact_checker import FactChecker
+from agent_builder.roles.memory_keeper import MemoryKeeper
 from agent_builder.roles.router import Router
 from agent_builder.roles.scheduler import Scheduler
 from agent_builder.roles.searcher import Searcher
@@ -18,6 +19,7 @@ __all__ = [
     "Decomposer",
     "DocWorker",
     "FactChecker",
+    "MemoryKeeper",
     "Router",
     "Scheduler",
     "Searcher",
