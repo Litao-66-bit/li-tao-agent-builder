@@ -1,5 +1,6 @@
 """角色包。每个角色一个模块，导入即可用。"""
 
+from agent_builder.roles.auditor import Auditor
 from agent_builder.roles.code_worker import CodeWorker
 from agent_builder.roles.conductor import Conductor
 from agent_builder.roles.data_analyst import DataAnalyst
@@ -14,6 +15,7 @@ from agent_builder.roles.summarizer import Summarizer
 from agent_builder.roles.test_runner import TestRunner
 
 __all__ = [
+    "Auditor",
     "CodeWorker",
     "Conductor",
     "DataAnalyst",
