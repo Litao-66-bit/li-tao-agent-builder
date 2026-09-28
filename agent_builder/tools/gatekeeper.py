@@ -80,7 +80,7 @@ class ToolGatekeeper:
             )
 
         # 文件类工具：沙箱路径校验（新增工具按需加入元组，不改已有校验逻辑）。
-        if tool_call.tool in ("file_write", "file_read", "file_edit", "file_list", "code_search", "data_query"):
+        if tool_call.tool in ("file_write", "file_read", "file_edit", "file_list", "code_search", "data_query", "git_commit", "rollback", "git_log"):
             self._check_sandbox_path(tool_call)
 
         # sandbox_run：可选 path 校验（path 存在则校验沙箱，不存在则跳过）。
@@ -112,11 +112,11 @@ class ToolGatekeeper:
     # ── 内部校验 ─────────────────────────────────────────────────
 
     def _check_sandbox_path(self, tool_call: ToolCall) -> None:
-        path_str = str(tool_call.args.get("path", ""))
+        path_str = str(tool_call.args.get("path") or tool_call.args.get("repo_path") or "")
         if not path_str:
-            self._reject(tool_call, "文件工具缺少 path 参数")
+            self._reject(tool_call, "文件工具缺少 path/repo_path 参数")
             raise permission_error(
-                "文件工具缺少 path 参数", source="tool_gatekeeper", correlation_id=self.correlation_id
+                "文件工具缺少 path/repo_path 参数", source="tool_gatekeeper", correlation_id=self.correlation_id
             )
         candidate = Path(path_str).resolve()
         try:
