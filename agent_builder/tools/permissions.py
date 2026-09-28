@@ -55,6 +55,19 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
         high_risk_tools=[],
         notes="路由者：匹配执行者+派发步骤+监控进度+回收产出；只路由不执行",
     ),
+    "doc_worker": RolePerm(
+        role="doc_worker",
+        allowed_tools=[
+            "file_read",
+            "file_write",
+            "web_fetch",
+            "citation_check",
+            "memory_read",
+            "audit_log",
+        ],
+        high_risk_tools=["file_write"],
+        notes="文档执行者：组织文档+来源标注+不编造；素材不足请求补充；来源不可考标存疑",
+    ),
     "code_worker": RolePerm(
         role="code_worker",
         allowed_tools=[
