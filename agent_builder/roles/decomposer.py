@@ -66,6 +66,7 @@ class Decomposer:
         requirement: str,
         raw_steps: list[dict[str, Any]] | None = None,
         context: dict[str, Any] | None = None,
+        llm_client: Any = None,
     ) -> DecomposeResult:
         """分解需求为步骤 DAG。
 
@@ -73,8 +74,11 @@ class Decomposer:
             task_id: 任务唯一 ID。
             requirement: 用户需求文本。
             raw_steps: 预拆分步骤列表（由 LLM 或人工提供）；
-                None 则返回空 DAG + 待确认（等 LLM 拆分）。
+                None 则尝试用 llm_client 拆分，失败返回空 DAG + 待确认。
             context: 上下文（可选，如已启用技能/插件清单）。
+            llm_client: LLM 客户端（可选，Any 避免循环导入）；
+                需实现 is_available + complete_json(prompt, schema_hint)。
+                None 时保持原待确认逻辑（向后兼容）。
 
         Returns:
             DecomposeResult：步骤 DAG + 待确认清单。
@@ -96,15 +100,19 @@ class Decomposer:
                 correlation_id=cid,
             )
 
-        # 无预拆分 → 返回待确认（等 LLM 拆分）。
+        # 无预拆分 → 尝试用 LLM 拆分。
         if raw_steps is None:
-            return DecomposeResult(
-                task_id=task_id,
-                steps={},
-                order=[],
-                parallel_groups=[],
-                pending_questions=["需要 LLM 拆分需求（当前无预拆分步骤）"],
-            )
+            if llm_client is not None and getattr(llm_client, "is_available", False):
+                raw_steps = self._llm_split(requirement, llm_client)
+            if not raw_steps:
+                # LLM 不可用或拆分失败 → 返回待确认。
+                return DecomposeResult(
+                    task_id=task_id,
+                    steps={},
+                    order=[],
+                    parallel_groups=[],
+                    pending_questions=["需要 LLM 拆分需求（当前无预拆分步骤）"],
+                )
 
         # 校验格式。
         validated = self._validate_steps(raw_steps)
@@ -131,6 +139,39 @@ class Decomposer:
         )
 
     # ── 内部方法 ──────────────────────────────────────────────
+
+    def _llm_split(self, requirement: str, llm_client: Any) -> list[dict[str, Any]]:
+        """调用 LLM 拆分需求为步骤列表。
+
+        Args:
+            requirement: 用户需求文本。
+            llm_client: LLM 客户端（需有 complete_json 方法）。
+
+        Returns:
+            步骤字典列表；LLM 失败或返回非法 JSON 返回空列表。
+        """
+        schema = '{"steps": [{"id": "step-001", "action": "动作类型", "inputs": {}, "depends_on": []}]}'
+        prompt = (
+            f"把以下需求拆成原子步骤列表（每步 = 一次工具调用或明确动作）。\n"
+            f"需求：{requirement}\n\n"
+            f"要求：\n"
+            f"- id 用 step-001 / step-002 格式\n"
+            f"- action 用动词短语（如 file_write / web_search / code_gen）\n"
+            f"- inputs 是参数字典\n"
+            f"- depends_on 是依赖的步骤 id 列表（无依赖为空列表）\n"
+            f"- 超过 10 步时合理分组\n"
+            f"- 有歧义不猜，直接列出待确认点\n"
+        )
+        try:
+            result = llm_client.complete_json(prompt, schema_hint=schema)
+        except Exception:  # noqa: BLE001  LLM 调用失败降级
+            return []
+        if not isinstance(result, dict):
+            return []
+        steps = result.get("steps", [])
+        if not isinstance(steps, list) or not steps:
+            return []
+        return steps
 
     def _validate_steps(self, raw_steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """校验步骤格式：必须有 id 和 action；补全可选字段。"""

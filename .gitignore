@@ -1,66 +1,31 @@
-# ===== 密钥与凭据（最高优先级：一律禁止入库）=====
+# 密钥与本地配置（绝不入库）
 .env
-.env.*
-!.env.example
-*.pem
-*.key
-*.p12
-*.pfx
-*.crt
-*.secrets
-*credential*
-*secret*.json
-!secret*.example.json
+.env.local
+.env.*.local
 
-# ===== Python =====
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
 *.egg-info/
-.venv/
-venv/
-env/
+.eggs/
 build/
 dist/
 
-# ===== 测试与工具缓存 =====
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 测试与 lint 缓存
 .pytest_cache/
 .ruff_cache/
-.mypy_cache/
 .coverage
 htmlcov/
-coverage.xml
-*.coverage
 
-# ===== 日志（可能含敏感信息）=====
-*.log
-logs/
-
-# ===== 本地模型与数据（体积大且可能含敏感数据）=====
-*.gguf
-*.safetensors
-*.onnx
-*.pb
-*.h5
-*.pt
-*.pth
-models/
-data/raw/
-
-# ===== 运行时状态 / 数据库 =====
-*.db
-*.sqlite
-*.sqlite3
-.agent-builder/
-
-# ===== 工具运行时临时文件 =====
-.tmp-tool-results/
-
-# ===== 本地交付打包（不入库）=====
-agent-builder-windows.zip
-
-# ===== IDE / 系统 =====
-.idea/
+# IDE
 .vscode/
+.idea/
+
+# OS
 .DS_Store
 Thumbs.db

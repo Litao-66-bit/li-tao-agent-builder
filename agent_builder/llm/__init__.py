@@ -1,5 +1,7 @@
-"""LLM 客户端抽象：所有角色访问模型层的唯一入口。"""
+"""LLM 层 —— DeepSeek API 客户端与执行器工厂。"""
 
-from agent_builder.llm.client import DeepSeekClient, LLMClient, MockClient
+from agent_builder.llm.client import LLMClient
+from agent_builder.llm.config import LLMConfig
+from agent_builder.llm.executor_factory import make_llm_executor
 
-__all__ = ["DeepSeekClient", "LLMClient", "MockClient"]
+__all__ = ["LLMClient", "LLMConfig", "make_llm_executor"]
