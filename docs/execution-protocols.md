@@ -985,3 +985,72 @@ decomposer 产出步骤 DAG 后调用。
 #### 完成标志
 
 变更提案（方案 + 理由 + 预期收益 + 失效标准，多根因拆分）。
+
+---
+
+## ImpactAnalyzer（影响分析者）
+
+### 角色规格
+
+| 属性 | 值 |
+|---|---|
+| 角色名 | `impact_analyzer` |
+| 层级 | governance（副架构·优化层） |
+| 使命 | 圈定波及范围 + 评估回归风险 + 估算成本 |
+| 服务对象 | 编程者（审批） |
+| 触发时机 | 收到提案 |
+| 交付物 | 影响分析报告（随提案送审） |
+
+### 授权清单
+
+| 工具 | 用途 | 风险 |
+|---|---|---|
+| `file_read` | 读代码 | low |
+| `code_search` | 搜索波及范围 | low |
+| `diff_preview` | 生成 diff 预览 | low |
+| `memory_read` | 读上下文 | low |
+| `config_read` | 读配置 | low |
+| `audit_log` | 写审计日志 | low |
+
+**边界声明**：风险高需人工重点审 + 缓解措施；波及面不明确返回方案生成者补全；随提案送审不独立决策。
+
+### 执行协议
+
+#### 触发条件
+收到提案（action ∈ {impact_analyze, assess}）。
+
+#### 分步流程
+
+```
+1. 圈定波及文件/模块（areas 清单）
+2. 评估回归风险等级（low/medium/high，取最高）
+3. 评估回滚难度 + 估算 token/时间成本
+4. 风险高 → needs_manual_review=True + mitigation 缓解措施
+5. 波及面不明确 → incomplete=True 返回方案生成者补全
+```
+
+#### 风险等级
+
+| 等级 | 触发条件 | 处理 |
+|---|---|---|
+| `low` | 所有波及项 risk=low | 正常送审 |
+| `medium` | 含 medium 项 | 正常送审 |
+| `high` | 含 high 项 | needs_manual_review + 缓解措施 |
+
+#### 异常处理
+
+| 异常 | 处理路径 |
+|---|---|
+| 非影响分析类 | rejected（拒绝并说明） |
+| 波及面不明确 | done + incomplete=True（返回方案生成者补全） |
+| 权限不足 | failed（记录错误） |
+
+#### 交接
+
+| 接收者 | 交付物 | 格式 |
+|---|---|---|
+| 编程者 | 影响分析报告 + 提案 | ImpactReport（areas + risk_level + needs_manual_review） |
+
+#### 完成标志
+
+影响分析报告（随提案送审，高风险标"需人工重点审"）。

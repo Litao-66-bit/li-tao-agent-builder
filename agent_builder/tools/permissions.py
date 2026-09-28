@@ -55,6 +55,19 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
         high_risk_tools=[],
         notes="路由者：匹配执行者+派发步骤+监控进度+回收产出；只路由不执行",
     ),
+    "impact_analyzer": RolePerm(
+        role="impact_analyzer",
+        allowed_tools=[
+            "file_read",
+            "code_search",
+            "diff_preview",
+            "memory_read",
+            "config_read",
+            "audit_log",
+        ],
+        high_risk_tools=[],
+        notes="影响分析者（副架构）：圈定波及范围+评估回归风险+估算成本；高风险需人工审",
+    ),
     "proposer": RolePerm(
         role="proposer",
         allowed_tools=[

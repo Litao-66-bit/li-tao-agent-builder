@@ -7,6 +7,7 @@ from agent_builder.roles.data_analyst import DataAnalyst
 from agent_builder.roles.decomposer import Decomposer
 from agent_builder.roles.doc_worker import DocWorker
 from agent_builder.roles.fact_checker import FactChecker
+from agent_builder.roles.impact_analyzer import ImpactAnalyzer
 from agent_builder.roles.memory_keeper import MemoryKeeper
 from agent_builder.roles.proposer import Proposer
 from agent_builder.roles.router import Router
@@ -23,6 +24,7 @@ __all__ = [
     "Decomposer",
     "DocWorker",
     "FactChecker",
+    "ImpactAnalyzer",
     "MemoryKeeper",
     "Proposer",
     "Router",
