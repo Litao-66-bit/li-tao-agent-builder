@@ -10,6 +10,7 @@ from agent_builder.roles.memory_keeper import MemoryKeeper
 from agent_builder.roles.router import Router
 from agent_builder.roles.scheduler import Scheduler
 from agent_builder.roles.searcher import Searcher
+from agent_builder.roles.summarizer import Summarizer
 from agent_builder.roles.test_runner import TestRunner
 
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     "Router",
     "Scheduler",
     "Searcher",
+    "Summarizer",
     "TestRunner",
 ]

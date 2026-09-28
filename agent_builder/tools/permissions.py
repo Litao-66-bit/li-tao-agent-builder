@@ -55,6 +55,17 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
         high_risk_tools=[],
         notes="路由者：匹配执行者+派发步骤+监控进度+回收产出；只路由不执行",
     ),
+    "summarizer": RolePerm(
+        role="summarizer",
+        allowed_tools=[
+            "file_read",
+            "memory_read",
+            "memory_write",
+            "audit_log",
+        ],
+        high_risk_tools=[],
+        notes="汇报员：汇集产出+结构化整理+不新增判断；未完成项如实列出不粉饰",
+    ),
     "memory_keeper": RolePerm(
         role="memory_keeper",
         allowed_tools=[
