@@ -19,6 +19,10 @@ Agent Builder 已注册工具一览。所有工具经 `ToolGatekeeper` 唯一出
 | `data_query` | 读 CSV/JSON 数据 | low | 否 | 白名单目录（path 沙箱） | 15s |
 | `plan_validate` | 校验步骤 DAG（格式/环依赖） | low | 否 | 纯计算，无 IO | 10s |
 | `memory_read` | 检索记忆（短期/长期） | low | 否 | 只读记忆存储 | 10s |
+| `audit_log` | 写审计日志 | low | 否 | 只追加不可篡改 | 10s |
+| `metric_collect` | 采集运行指标 | low | 否 | 只读审计日志 | 10s |
+| `config_read` | 读架构配置 | low | 否 | 只读 permissions/registry | 10s |
+| `diff_preview` | 生成变更 diff 预览 | low | 否 | 纯计算（difflib） | 10s |
 
 ## memory_manager 角色可用工具
 
@@ -154,3 +158,40 @@ Agent Builder 已注册工具一览。所有工具经 `ToolGatekeeper` 唯一出
   - 无时间戳/时间戳损坏的条目不清理（数据保护）
 - **错误**：`E_VALIDATION`（scope 非法）、`E_TOOL`（存储读写失败）
 - **角色**：memory_manager（专用，operator 不可调用）
+
+### audit_log
+- **参数**：`role` (string, required)、`action` (string, required)、`detail` (string, default "")、`correlation_id` (string, default "")
+- **输出**：`logged <id>`（如 `logged a-000001`）
+- **存储**：JSON 文件（`~/.li-tao-agent/audit.json`，可通过 `AGENT_AUDIT_FILE` 环境变量覆盖）
+- **只追加不可篡改**：`audit_store.append_audit` 只追加，不提供修改/删除接口
+- **correlation_id**：为空时自动用当前上下文的 correlation_id（由 registry 通过 contextvars 传递）
+- **错误**：`E_VALIDATION`（role/action 为空/detail 超长）、`E_TOOL`（存储读写失败）
+- **角色**：operator
+
+### metric_collect
+- **参数**：`scope` (enum summary/by_action/by_role/by_status, default summary)、`window` (int, default 0=全部历史)
+- **输出**：
+  - `summary`：`total: N` + top-3 actions/roles
+  - `by_action`/`by_role`/`by_status`：逐项计数 `field: count`
+- **数据源**：audit_store 的审计日志（只读聚合）
+- **时间窗口**：`window>0` 只统计最近 N 秒的条目（按 `ts` 过滤）
+- **错误**：`E_VALIDATION`（scope/window 非法）、`E_TOOL`（审计日志读取失败）
+- **角色**：operator
+
+### config_read
+- **参数**：`section` (enum roles/tools/all, default all)
+- **输出**：
+  - `roles`：角色权限矩阵（allowed_tools / high_risk_tools / notes）
+  - `tools`：工具规格（risk / timeout / cost / roles）
+  - `all`：roles + tools
+- **数据源**：`permissions.get_default_role_perms()` + `registry.list_tools()`（只读，无 IO）
+- **错误**：`E_VALIDATION`（section 非法）
+- **角色**：operator
+
+### diff_preview
+- **参数**：`old_content` (string, required)、`new_content` (string, required)、`context` (int, default 3)、`label` (string, default "")
+- **输出**：unified diff 文本（`---/+++/-/+` 格式）；无差异返回 `(no differences)`
+- **计算**：`difflib.unified_diff`，纯计算无 IO
+- **label**：显示为 `<label> (old)` / `<label> (new)`；空则 `(old)` / `(new)`
+- **错误**：`E_VALIDATION`（两侧都空/内容超长/context 为负）
+- **角色**：operator
