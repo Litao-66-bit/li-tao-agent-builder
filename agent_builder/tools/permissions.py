@@ -55,6 +55,19 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
         high_risk_tools=[],
         notes="路由者：匹配执行者+派发步骤+监控进度+回收产出；只路由不执行",
     ),
+    "historian": RolePerm(
+        role="historian",
+        allowed_tools=[
+            "audit_log",
+            "git_log",
+            "memory_read",
+            "memory_write",
+            "change_notify",
+            "file_read",
+        ],
+        high_risk_tools=[],
+        notes="记录员（副架构记录层）：记录全流程+维护版本历史+生成变更说明；日志不可篡改；审批被拒也记录",
+    ),
     "gatekeeper": RolePerm(
         role="gatekeeper",
         allowed_tools=[

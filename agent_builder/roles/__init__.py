@@ -8,6 +8,7 @@ from agent_builder.roles.decomposer import Decomposer
 from agent_builder.roles.doc_worker import DocWorker
 from agent_builder.roles.fact_checker import FactChecker
 from agent_builder.roles.gatekeeper import Gatekeeper
+from agent_builder.roles.historian import Historian
 from agent_builder.roles.impact_analyzer import ImpactAnalyzer
 from agent_builder.roles.memory_keeper import MemoryKeeper
 from agent_builder.roles.proposer import Proposer
@@ -26,6 +27,7 @@ __all__ = [
     "DocWorker",
     "FactChecker",
     "Gatekeeper",
+    "Historian",
     "ImpactAnalyzer",
     "MemoryKeeper",
     "Proposer",
