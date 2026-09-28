@@ -478,3 +478,115 @@ decomposer 产出步骤 DAG 后调用。
 #### 完成标志
 
 结论 + 计算过程 + 口径说明（每条结论标明 fact/inference/pending_verification）。
+
+---
+
+## Searcher（检索执行者）
+
+### 角色规格
+
+| 属性 | 值 |
+|---|---|
+| 角色名 | `searcher` |
+| 层级 | executor（主架构·执行层） |
+| 使命 | 多路关键词检索 + 去重排序 + 来源标注 |
+| 服务对象 | router（上游）→ 各执行者（引用） |
+| 触发时机 | 收到信息检索类步骤 |
+| 交付物 | `[{claim, source_url, snippet, confidence, verified}]` |
+
+### 授权清单
+
+| 工具 | 用途 | 风险 |
+|---|---|---|
+| `web_search` | 网页搜索 | low |
+| `web_fetch` | 抓取页面 | low |
+| `citation_check` | 校验来源 | low |
+| `memory_read` | 读记忆 | low |
+| `audit_log` | 写审计日志 | low |
+
+**边界声明**：结果不足换关键词再搜 1 轮；无来源标"未查证"；工具被拒换合法工具或上报。
+
+### 执行协议
+
+#### 触发条件
+收到路由者分派的检索类步骤（action ∈ SEARCH_ACTIONS）。
+
+#### 分步流程
+
+```
+1. 拆解检索需求为多路关键词（中英文各一路）
+2. 校验是否检索类 → 非检索 → rejected
+3. 经工具门卫调用检索工具
+4. 去重（按 source_url + claim）、按权威性（置信度）排序
+5. 结果不足（< MIN_RESULTS）→ 换关键词再搜 1 轮（最多 MAX_ROUNDS 轮）
+6. 关键声明无来源 → 标"未查证"（verified=False）
+7. 输出带来源链接与置信度的清单
+```
+
+#### 异常处理
+
+| 异常 | 处理路径 |
+|---|---|
+| 非检索类步骤 | rejected（拒绝并说明） |
+| 工具被门卫拒绝 | failed（查明原因，换合法工具或上报） |
+| 结果不足 | 换关键词再搜 1 轮 |
+| 关键声明无来源 | 标"未查证"（verified=False） |
+
+#### 交接
+
+| 接收者 | 交付物 | 格式 |
+|---|---|---|
+| router | 执行结果 | SearchResult（items + keywords_used + rounds） |
+| 各执行者 | 检索清单 | items（claim + source_url + snippet + confidence + verified） |
+
+#### 完成标志
+
+`[{claim, source_url, snippet, confidence, verified}]`（区分"已查证/单方声称"）。
+
+---
+
+## ToolGuardian（工具门卫）
+
+### 角色规格
+
+| 属性 | 值 |
+|---|---|
+| 角色名 | `tool_guardian` |
+| 层级 | governance（主架构·工具层） |
+| 使命 | 校验工具白名单 + 参数安全 + 审计日志 |
+| 服务对象 | 所有角色（唯一出口，不可绕过） |
+| 触发时机 | 任何角色发起工具调用 |
+| 交付物 | 工具结果 或 拒绝原因 |
+
+### 实现说明
+
+**已实现**为 `agent_builder/tools/gatekeeper.py` 的 `ToolGatekeeper` 类。
+
+核心校验流程：
+1. 角色权限校验（角色未注册 / 工具未列入白名单 → E_PERMISSION，永不重试）
+2. 高风险工具审批门（file_write / git_commit / rollback 需审批）
+3. 文件类工具沙箱路径校验（realpath 必须在白名单目录内）
+4. 网络类工具 URL 安全校验（防 SSRF，禁私有网段）
+5. 写审计日志（谁调的、参数、结果、耗时）
+
+### 校验分支
+
+| 校验类型 | 适用工具 | 方法 |
+|---|---|---|
+| 沙箱 path/repo_path | file_write, file_read, file_list, code_search, data_query, git_commit, rollback, git_log | `_check_sandbox_path` |
+| 可选 path | sandbox_run | `_check_sandbox_path_optional` |
+| 混合 target | test_run | `_check_target_safety` |
+| URL 安全 | web_fetch, web_search | `_check_url_safety` |
+| 纯角色校验 | 其余工具 | （无额外校验） |
+
+### 决策规则
+
+| 规则 | 处理 |
+|---|---|
+| 命中禁止规则 | 拒绝 + 返回拒绝原因 |
+| 高风险动作（删除/覆盖/外发） | 转审批门等用户确认 |
+| 怀疑注入 | 拒绝 + 标记事件上报审计员 |
+
+### 完成标志
+
+工具结果（executed）或拒绝原因（denied）。
