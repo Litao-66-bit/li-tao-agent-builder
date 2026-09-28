@@ -23,6 +23,16 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
         high_risk_tools=[],
         notes="总指挥：编排任务全程、维护状态机、管理返工/中断/审批；只编排不执行，不可直接写文件/提交代码",
     ),
+    "decomposer": RolePerm(
+        role="decomposer",
+        allowed_tools=[
+            "config_read",
+            "memory_read",
+            "audit_log",
+        ],
+        high_risk_tools=[],
+        notes="分解器：拆需求为步骤DAG、去重/标注依赖/分组/歧义检查；只规划不执行",
+    ),
     "operator": RolePerm(
         role="operator",
         allowed_tools=[
