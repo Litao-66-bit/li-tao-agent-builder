@@ -55,6 +55,19 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
         high_risk_tools=[],
         notes="路由者：匹配执行者+派发步骤+监控进度+回收产出；只路由不执行",
     ),
+    "data_analyst": RolePerm(
+        role="data_analyst",
+        allowed_tools=[
+            "data_query",
+            "sandbox_run",
+            "file_read",
+            "memory_read",
+            "audit_log",
+            "citation_check",
+        ],
+        high_risk_tools=[],
+        notes="数据分析者：读数据+工具计算（绝不心算）+结论区分事实/推断/待验证；样本不足出质量报告",
+    ),
     "doc_worker": RolePerm(
         role="doc_worker",
         allowed_tools=[
