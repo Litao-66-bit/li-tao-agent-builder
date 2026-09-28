@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Builder</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- 顶栏：六阶段状态机 -->
+  <header class="topbar">
+    <div class="topbar-title">🧭 Agent Builder</div>
+    <nav class="stage-bar" id="stageBar">
+      <span class="stage">需求</span>
+      <span class="stage">计划</span>
+      <span class="stage">确认</span>
+      <span class="stage">执行</span>
+      <span class="stage">验证</span>
+      <span class="stage">汇报</span>
+    </nav>
+  </header>
+
+  <!-- 主体三栏 -->
+  <div class="main">
+
+    <!-- 左栏：技能 / 插件 / 新建项目 -->
+    <aside class="sidebar-left">
+      <div class="panel">
+        <div class="panel-title">🔧 技能</div>
+        <div class="skill-row">
+          <span class="skill-label">文件读写</span>
+          <label class="toggle">
+            <input type="checkbox" checked>
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="skill-row">
+          <span class="skill-label">联网搜索</span>
+          <label class="toggle">
+            <input type="checkbox">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+        <div class="skill-row">
+          <span class="skill-label">命令执行 <span class="warn-badge" title="高风险操作，需审批">⚠</span></span>
+          <label class="toggle">
+            <input type="checkbox">
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">🧩 插件</div>
+        <div class="plugin-item">· 海报生成</div>
+        <div class="plugin-item">· 网页抓取</div>
+        <div class="plugin-item">· Git 集成</div>
+        <div class="plugin-add">＋ 添加插件</div>
+      </div>
+
+      <div class="new-project-btn">
+        <div class="big">＋ 新建项目</div>
+        <div class="sub">从需求开始构建 Agent</div>
+      </div>
+    </aside>
+
+    <!-- 中栏：对话区（动态渲染） -->
+    <main class="chat-area" id="chatArea">
+      <!-- 消息由 JS 动态插入 -->
+    </main>
+
+    <!-- 右栏：文件框 -->
+    <aside class="sidebar-right">
+      <div class="file-header">
+        <span class="file-title">📁 工作区文件</span>
+        <span class="file-upload-btn">↻ 上传</span>
+      </div>
+      <div class="file-path">工作区 / workspace</div>
+
+      <div class="file-tree">
+        <div class="tree-node depth-0">📄 README.md</div>
+        <div class="tree-node depth-0">📁 agent_builder/</div>
+        <div class="tree-node depth-1">└─ tools/ · graph/ · llm/</div>
+        <div class="tree-node depth-0 new">📄 poster.md <span class="new-badge">NEW</span></div>
+      </div>
+
+      <div class="file-preview">
+        <span class="label">文件预览</span>：poster.md<br>
+        # 宣传海报生成 Agent…（只读）
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- 底部：模型设置 + 输入 -->
+  <footer class="bottom-bar">
+    <div class="model-settings">
+      <div class="setting-chip">
+        模型
+        <select id="modelSelect">
+          <option>deepseek-chat</option>
+          <option>deepseek-reasoner</option>
+          <option>gpt-4o</option>
+        </select>
+        <span style="color:#2da44e;">✓</span>
+      </div>
+      <div class="setting-chip slider-wrap">
+        推理强度
+        <span class="slider-value" id="tempValue">0.7</span>
+        <input type="range" id="tempSlider" min="0" max="1" step="0.1" value="0.7">
+      </div>
+      <div class="setting-chip">
+        <span class="key-display">
+          ⚿ <span id="keyMasked">sk-••••••</span>
+          <span class="key-toggle" id="keyToggle" title="显示/隐藏">👁</span>
+        </span>
+      </div>
+      <div class="setting-chip">高级 ▾</div>
+      <div class="token-stats">token 1,234 · ≈¥0.06 · <span class="danger">剩余 38 次</span></div>
+    </div>
+
+    <div class="input-row">
+      <input type="text" class="msg-input" id="msgInput" placeholder="输入你的需求…（Enter 发送 / Shift+Enter 换行）">
+      <button class="btn-secondary" id="interruptBtn">⏸ 中断</button>
+      <button class="btn-send" id="sendBtn">发送 ➤</button>
+    </div>
+  </footer>
+
+  <!-- 先加载 API 封装层，再加载业务逻辑 -->
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+
+</body>
+</html>

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from agent_builder.api.routes import router
 from agent_builder.llm.client import LLMClient
@@ -20,6 +21,16 @@ def create_app() -> FastAPI:
         description="Agent Builder 的 HTTP 接口层：创建任务、驱动状态机、触发分解。",
         version="0.1.0",
     )
+
+    # CORS：允许前端（8080）跨域调用后端（8000）。
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # 开发环境允许所有来源
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     app.include_router(router)
 
     # 启动时检查 LLM 是否可用（不抛错）。
