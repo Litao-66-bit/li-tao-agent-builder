@@ -23,6 +23,9 @@ Agent Builder 已注册工具一览。所有工具经 `ToolGatekeeper` 唯一出
 | `metric_collect` | 采集运行指标 | low | 否 | 只读审计日志 | 10s |
 | `config_read` | 读架构配置 | low | 否 | 只读 permissions/registry | 10s |
 | `diff_preview` | 生成变更 diff 预览 | low | 否 | 纯计算（difflib） | 10s |
+| `approval_request` | 发起审批请求 | low | 否 | 框架级 | 10s |
+| `change_notify` | 变更通知 | low | 否 | 框架级 | 10s |
+| `git_log` | 查询版本历史 | low | 否 | 只读（git log） | 15s |
 
 ## memory_manager 角色可用工具
 
@@ -32,10 +35,19 @@ Agent Builder 已注册工具一览。所有工具经 `ToolGatekeeper` 唯一出
 | `memory_write` | 写入记忆 | low | 否 | 记忆存储；敏感信息 base64 编码 | 10s |
 | `memory_forget` | 遗忘/清理过期记忆 | low | 否 | 记忆存储 | 10s |
 
+## sub_architect 角色可用工具
+
+| 工具 | 用途 | 风险 | 审批 | 数据边界 | 超时 |
+|---|---|---|---|---|---|
+| `git_commit` | 提交版本 | high | ⚠ 是 | 副架构专用（git add+commit） | 30s |
+| `rollback` | 回滚版本 | high | ⚠ 是 | 副架构专用（git reset --hard） | 30s |
+| `git_log` | 查询版本历史 | low | 否 | 只读（git log） | 15s |
+
 ## 安全机制
 
 ### 路径沙箱（文件类工具）
-`file_read` / `file_list` / `file_write` / `file_edit` / `code_search` / `data_query` 的 `path` 参数
+`file_read` / `file_list` / `file_write` / `file_edit` / `code_search` / `data_query` 的 `path` 参数，
+以及 `git_commit` / `rollback` / `git_log` 的 `repo_path` 参数，
 经 `ToolGatekeeper._check_sandbox_path` 校验：`Path.resolve()` 必须落在 `WORKSPACE_DIR` 内，
 防止路径穿越越权读写系统目录。
 
@@ -194,4 +206,42 @@ Agent Builder 已注册工具一览。所有工具经 `ToolGatekeeper` 唯一出
 - **计算**：`difflib.unified_diff`，纯计算无 IO
 - **label**：显示为 `<label> (old)` / `<label> (new)`；空则 `(old)` / `(new)`
 - **错误**：`E_VALIDATION`（两侧都空/内容超长/context 为负）
+- **角色**：operator
+
+### git_commit
+- **参数**：`repo_path` (string, required)、`message` (string, required)、`files` (array, 可选，空则 git add -A)
+- **输出**：`committed <hash>`
+- **执行**：`git_ops.run_git` 执行 `git add` + `git commit` + `git rev-parse HEAD`
+- **安全**：副架构专用 + 高风险需审批 + repo_path 沙箱校验（门卫 + git_ops 二次校验）
+- **错误**：`E_VALIDATION`（message 为空/超长）、`E_TOOL`（git 命令失败）
+- **角色**：sub_architect（专用，operator 不可调用）
+
+### rollback
+- **参数**：`repo_path` (string, required)、`target` (string, required，commit hash 或 ref)
+- **输出**：`rolled back: <old8> -> <new8>`
+- **执行**：`git_ops.run_git` 执行 `git rev-parse HEAD` + `git reset --hard <target>` + `git rev-parse HEAD`
+- **安全**：副架构专用 + 高风险需审批 + repo_path 沙箱校验
+- **错误**：`E_VALIDATION`（target 为空）、`E_TOOL`（git 命令失败）
+- **角色**：sub_architect（专用，operator 不可调用）
+
+### git_log
+- **参数**：`repo_path` (string, required)、`limit` (int, default 10)、`oneline` (bool, default true)
+- **输出**：git log 文本；无 commit 返回 `(no commits)`
+- **执行**：`git_ops.run_git` 执行 `git log -n<limit> [--oneline]`
+- **安全**：只读 + repo_path 沙箱校验（limit 上限 100）
+- **错误**：`E_VALIDATION`（limit 非正）、`E_TOOL`（git 命令失败）
+- **角色**：operator + sub_architect
+
+### approval_request
+- **参数**：`tool_call_id` (string, required)、`reason` (string, required)、`requested_role` (string, 可选)
+- **输出**：`approval requested: apr-<ts>-<tcid8>`
+- **框架级**：纯记录生成，无 IO，无审批
+- **错误**：`E_VALIDATION`（tool_call_id/reason 为空/reason 超长）
+- **角色**：operator
+
+### change_notify
+- **参数**：`target` (string, required)、`change_type` (enum code/config/doc/test/other, required)、`summary` (string, required)
+- **输出**：`notified <target>: ntf-<ts>-<target8>`
+- **框架级**：纯记录生成，无 IO，无审批
+- **错误**：`E_VALIDATION`（target/summary 为空/change_type 非法/summary 超长）
 - **角色**：operator
