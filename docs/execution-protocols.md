@@ -1054,3 +1054,81 @@ decomposer 产出步骤 DAG 后调用。
 #### 完成标志
 
 影响分析报告（随提案送审，高风险标"需人工重点审"）。
+
+---
+
+## Gatekeeper（看门人）
+
+**注意**：本角色是副架构执行层「看门人」，与 `ToolGatekeeper`（工具门卫，基础设施层）不同。
+
+### 角色规格
+
+| 属性 | 值 |
+|---|---|
+| 角色名 | `gatekeeper` |
+| 层级 | governance（副架构·执行层） |
+| 使命 | 提案获批后应用变更 + 跑回归 + 失败回滚 |
+| 服务对象 | 记录员（下游） |
+| 触发时机 | 提案获批后（无批准不动作） |
+| 交付物 | 应用结果 + 验证报告 |
+
+### 授权清单
+
+| 工具 | 用途 | 风险 |
+|---|---|---|
+| `git_commit` | 提交版本 | **high**（需审批） |
+| `rollback` | 回滚版本 | **high**（需审批） |
+| `test_run` | 跑回归测试 | low |
+| `sandbox_run` | 沙箱应用变更 | low |
+| `audit_log` | 写审计日志 | low |
+| `memory_read` | 读上下文 | low |
+
+**边界声明**：无批准不动作；批准过期重审；回归未全绿不合并生产；回滚也失败冻结模块升级人工。
+
+### 执行协议
+
+#### 触发条件
+提案获批后（action ∈ {apply, gatekeep}，approval.granted_by 必须存在）。
+
+#### 分步流程
+
+```
+1. 检查批准是否存在（无批准 → rejected）
+2. 检查批准是否过期（> 24h → rejected + approval_expired）
+3. 在沙箱/分支应用变更（git commit / 快照）
+4. 跑回归测试
+5. 回归未全绿 → 回滚上一版本并通知
+6. 回滚也失败 → 冻结该模块并升级人工
+7. 回归全绿 → 应用成功（done）
+```
+
+#### 状态流转
+
+| 状态 | 触发条件 | 含义 |
+|---|---|---|
+| `done` | tests_passed=True | 应用成功，回归全绿 |
+| `rolled_back` | tests_passed=False, rollback 成功 | 已回滚上一版本 |
+| `frozen` | rollback_failed=True | 模块冻结，升级人工 |
+| `rejected` | 无批准 / 批准过期 / 非应用类 | 拒绝执行 |
+| `failed` | 执行异常 | 记录错误 |
+| `pending` | executor_fn=None | 只校验不执行 |
+
+#### 异常处理
+
+| 异常 | 处理路径 |
+|---|---|
+| 无批准 | rejected（无批准不动作） |
+| 批准过期 | rejected + approval_expired=True（重新走审批） |
+| 回归失败 | rolled_back（回滚上一版本） |
+| 回滚失败 | frozen（冻结模块 + 升级人工） |
+| 权限不足 | failed（记录错误） |
+
+#### 交接
+
+| 接收者 | 交付物 | 格式 |
+|---|---|---|
+| 记录员 | 应用结果 + 验证报告 | ApplyResult（commit_sha + tests_passed + rolled_back + module_frozen） |
+
+#### 完成标志
+
+应用结果 + 验证报告（回归全绿才合并生产，失败回滚，回滚失败冻结）。

@@ -55,6 +55,19 @@ DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
         high_risk_tools=[],
         notes="路由者：匹配执行者+派发步骤+监控进度+回收产出；只路由不执行",
     ),
+    "gatekeeper": RolePerm(
+        role="gatekeeper",
+        allowed_tools=[
+            "git_commit",
+            "rollback",
+            "test_run",
+            "sandbox_run",
+            "audit_log",
+            "memory_read",
+        ],
+        high_risk_tools=["git_commit", "rollback"],
+        notes="看门人（副架构执行层）：应用变更+跑回归+失败回滚；无批准不动作；批准过期重审",
+    ),
     "impact_analyzer": RolePerm(
         role="impact_analyzer",
         allowed_tools=[
