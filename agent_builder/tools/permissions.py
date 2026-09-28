@@ -10,6 +10,19 @@ from agent_builder.contracts.schemas import RolePerm
 
 # 角色 → 权限（按需扩展；未列出的角色调用任何工具都会被门卫拒绝）
 DEFAULT_ROLE_PERMS: dict[str, RolePerm] = {
+    "conductor": RolePerm(
+        role="conductor",
+        allowed_tools=[
+            "plan_validate",
+            "approval_request",
+            "change_notify",
+            "audit_log",
+            "memory_read",
+            "config_read",
+        ],
+        high_risk_tools=[],
+        notes="总指挥：编排任务全程、维护状态机、管理返工/中断/审批；只编排不执行，不可直接写文件/提交代码",
+    ),
     "operator": RolePerm(
         role="operator",
         allowed_tools=[
