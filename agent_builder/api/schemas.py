@@ -26,6 +26,18 @@ class InterruptRequest(BaseModel):
     reason: str = Field(default="user_stop", description="中断原因")
 
 
+class StepResult(BaseModel):
+    """单个步骤的执行结果（用于回传给前端）。"""
+
+    step_id: str
+    action: str
+    status: str  # done | failed | skipped | pending_approval | pending
+    executor: str
+    result: str | None = None
+    error: str | None = None
+    retries: int = 0
+
+
 class TaskResponse(BaseModel):
     """任务状态响应。"""
 
@@ -37,6 +49,8 @@ class TaskResponse(BaseModel):
     created_at: str
     updated_at: str
     plan: dict[str, Any] | None = None
+    execution_results: list[StepResult] = Field(default_factory=list)
+    gatekeeper_audit: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DecomposeResponse(BaseModel):
@@ -75,6 +89,7 @@ __all__ = [
     "FileNode",
     "InterruptRequest",
     "PlanRequest",
+    "StepResult",
     "TaskCreateRequest",
     "TaskResponse",
 ]

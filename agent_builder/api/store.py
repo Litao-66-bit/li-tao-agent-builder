@@ -1,19 +1,32 @@
-"""内存任务存储 —— 存 Conductor + 原始需求。"""
+"""内存任务存储 —— 存 Conductor + 原始需求 + 步骤 + 执行结果。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
-from agent_builder.contracts.schemas import TaskState
+from agent_builder.contracts.schemas import Step, TaskState
 from agent_builder.roles.conductor import Conductor
 
 
 @dataclass(slots=True)
 class TaskEntry:
-    """单个任务条目：Conductor + 原始需求。"""
+    """单个任务条目：Conductor + 原始需求 + 步骤 DAG + 执行结果。
+
+    Attributes:
+        conductor: 总指挥（持有 TaskState 状态机）。
+        requirement: 原始需求文本。
+        steps: 分解器产出的步骤字典（step_id → Step）。
+        execution_results: 执行编排器产出的步骤结果列表（每项含
+            step_id / status / executor / result / error / retries）。
+        gatekeeper_audit: 工具门卫审计快照（执行后追加）。
+    """
 
     conductor: Conductor
     requirement: str
+    steps: dict[str, Step] = field(default_factory=dict)
+    execution_results: list[dict[str, Any]] = field(default_factory=list)
+    gatekeeper_audit: list[dict[str, Any]] = field(default_factory=list)
 
 
 class InMemoryTaskStore:

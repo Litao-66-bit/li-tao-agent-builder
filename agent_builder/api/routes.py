@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent_builder.api.deps import build_llm_client_or_none, get_store
+from agent_builder.api.orchestrator import run_plan
 from agent_builder.api.schemas import (
     DecomposeResponse,
     FileNode,
@@ -19,6 +20,7 @@ from agent_builder.api.schemas import (
 )
 from agent_builder.api.store import InMemoryTaskStore
 from agent_builder.contracts.errors import AgentError
+from agent_builder.contracts.schemas import Plan
 from agent_builder.roles.decomposer import Decomposer
 from agent_builder.tools.gatekeeper import WORKSPACE_DIR
 
@@ -68,7 +70,11 @@ def _build_file_tree(root: Path, current: Path, depth: int = 0) -> list[FileNode
 
 
 def _to_task_response(entry_or_conductor: Any, task_id: str) -> TaskResponse:
-    """把 Conductor 的 TaskState 转 TaskResponse。"""
+    """把 Conductor 的 TaskState 转 TaskResponse。
+
+    支持传 TaskEntry（含 steps/execution_results/gatekeeper_audit）
+    或裸 Conductor（仅状态字段）。
+    """
     # 兼容传 entry 或 conductor。
     conductor = getattr(entry_or_conductor, "conductor", entry_or_conductor)
     state = conductor.task_state
@@ -78,6 +84,9 @@ def _to_task_response(entry_or_conductor: Any, task_id: str) -> TaskResponse:
     plan = None
     if state.plan is not None:
         plan = state.plan.model_dump()
+    # execution_results / gatekeeper_audit 仅 entry 上有（approve 后才填充）。
+    execution_results = getattr(entry_or_conductor, "execution_results", []) or []
+    gatekeeper_audit = getattr(entry_or_conductor, "gatekeeper_audit", []) or []
     return TaskResponse(
         task_id=task_id,
         status=state.status.value if hasattr(state.status, "value") else str(state.status),
@@ -87,6 +96,8 @@ def _to_task_response(entry_or_conductor: Any, task_id: str) -> TaskResponse:
         created_at=state.created_at,
         updated_at=state.updated_at,
         plan=plan,
+        execution_results=execution_results,
+        gatekeeper_audit=gatekeeper_audit,
     )
 
 
@@ -160,9 +171,23 @@ def plan_task(
             requirement=entry.requirement,
             llm_client=llm_client,
         )
+        # 保存 steps 到 entry，供 approve 阶段 run_plan 使用。
+        entry.steps = result.steps
+        # 构造 Plan 并校验引用完整性 + DAG 无环；置位 plan 后转 AWAITING_CONFIRM。
+        plan = Plan(
+            task_id=task_id,
+            order=result.order,
+            parallel_groups=result.parallel_groups,
+            confirmed_by_user=False,
+        )
+        plan.validate_steps(result.steps)
+        conductor.task_state.plan = plan
         conductor.handle_plan_ready()  # PLANNING → AWAITING_CONFIRM
     except AgentError as exc:
         raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+    except ValueError as exc:
+        # Plan.validate_steps 抛的引用完整性/环错误。
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     status = conductor.task_state.status
     return DecomposeResponse(
         task_id=task_id,
@@ -179,14 +204,45 @@ def approve_task(
     task_id: str,
     store: InMemoryTaskStore = Depends(get_store),
 ) -> TaskResponse:
-    """用户确认计划 → 状态转 EXECUTING。"""
+    """用户确认计划 → 状态转 EXECUTING → 执行编排器派发各步骤。
+
+    步骤全部 done 时自动转 VERIFYING；出现 failed/pending_approval 则保持
+    EXECUTING，由前端展示执行结果卡片供用户决策（重试/中断）。
+    """
     entry = store.get(task_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    conductor = entry.conductor
     try:
-        entry.conductor.handle_plan_accepted()  # AWAITING_CONFIRM → EXECUTING
+        conductor.handle_plan_accepted()  # AWAITING_CONFIRM → EXECUTING
     except AgentError as exc:
         raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+
+    # 已有 plan + steps 时触发执行编排器；空计划保持 EXECUTING 让用户决策。
+    plan = conductor.task_state.plan
+    if plan is not None and entry.steps:
+        try:
+            execution_results, gatekeeper_audit = run_plan(
+                task_id=task_id,
+                plan=plan,
+                steps=entry.steps,
+            )
+        except AgentError as exc:
+            raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+        entry.execution_results = execution_results
+        entry.gatekeeper_audit = gatekeeper_audit
+
+        # 全部 done → 转 VERIFYING；否则保持 EXECUTING 让用户决策。
+        all_done = bool(execution_results) and all(
+            r.get("status") == "done" for r in execution_results
+        )
+        if all_done:
+            try:
+                conductor.handle_all_steps_done()  # EXECUTING → VERIFYING
+            except AgentError as exc:
+                raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+    # 无 steps（空计划 / LLM 未拆分）→ 保持 EXECUTING，等待用户中断或重新规划。
+
     return _to_task_response(entry, task_id)
 
 

@@ -185,6 +185,29 @@ async function handleApprove() {
     updateStageBar(task.status);
     appendMessage('agent', '计划已批准，进入执行阶段…');
     document.querySelectorAll('#approveBtn, #rejectBtn').forEach(b => b.remove());
+
+    // 渲染执行编排器产出的步骤结果卡片。
+    const results = task.execution_results || [];
+    let doneCount = 0;
+    let failedCount = 0;
+    for (const r of results) {
+      const detail = r.error || r.result || '';
+      const cardStatus = r.status === 'done' ? 'success'
+        : (r.status === 'failed' || r.status === 'pending_approval') ? 'failed'
+        : 'pending';
+      if (r.status === 'done') doneCount++;
+      else if (r.status === 'failed' || r.status === 'pending_approval') failedCount++;
+      appendToolCard(`${r.action} · ${r.step_id}`, cardStatus, detail || '(无输出)');
+    }
+
+    // 状态汇总提示。
+    if (task.status === 'verifying') {
+      appendMessage('agent', `所有 ${results.length} 个步骤执行完成（成功 ${doneCount}），进入验证阶段。`);
+    } else if (failedCount > 0) {
+      appendMessage('agent', `执行结束：成功 ${doneCount} / 失败 ${failedCount}。可中断任务或重新规划。`);
+    } else if (results.length > 0) {
+      appendMessage('agent', `执行进度：成功 ${doneCount} / 共 ${results.length}。等待后续状态。`);
+    }
   } catch (err) {
     appendMessage('agent', `❌ 批准失败：${err.message}`);
   }
