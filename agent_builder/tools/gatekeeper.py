@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,8 @@ from agent_builder.tools.redact import redact_args
 from agent_builder.tools.url_guard import validate_url
 
 # 默认白名单目录：只有工作区内的路径可写（防路径穿越/越权写系统目录）。
-WORKSPACE_DIR = Path("/home/user/Doubao/chats/38443251841377538")
+# 可用环境变量 AGENT_WORKSPACE_DIR 覆盖（CI / 生产按需指向真实工作区）。
+WORKSPACE_DIR = Path(os.environ.get("AGENT_WORKSPACE_DIR", "/workspace"))
 
 
 @dataclass(slots=True)

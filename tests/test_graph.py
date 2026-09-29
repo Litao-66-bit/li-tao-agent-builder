@@ -15,7 +15,7 @@ from agent_builder.contracts.errors import AgentError
 from agent_builder.contracts.schemas import Approval, RolePerm, ToolCall
 from agent_builder.graph.build import build_graph
 from agent_builder.llm.client import MockClient
-from agent_builder.tools.gatekeeper import ToolGatekeeper
+from agent_builder.tools.gatekeeper import WORKSPACE_DIR, ToolGatekeeper
 
 REQUIREMENT = "帮我生成一个每日新闻摘要 Agent"
 
@@ -119,7 +119,7 @@ class TestGatekeeper:
             audit_id="a-4",
             role="code_worker",
             tool="file_write",
-            args={"path": "/home/user/Doubao/chats/38443251841377538/demo.txt"},
+            args={"path": str(WORKSPACE_DIR / "demo.txt")},
             approval=Approval(required=True, granted_by="user", ts="2026-09-26T10:00:00+08:00"),
         )
         assert gk.check(granted).status == "executed"
