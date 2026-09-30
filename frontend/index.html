@@ -82,11 +82,33 @@
         <div class="tree-node depth-0">⟳ 加载中…</div>
       </div>
 
+      <!-- 选择本地文件：仅在前端读取预览，不上传后端 -->
+      <div class="local-file-bar">
+        <button type="button" class="local-file-btn" id="localFileBtn">＋ 选择本地文件</button>
+        <input type="file" id="localFileInput" hidden>
+      </div>
+
       <div class="file-preview" id="filePreview">
-        <span class="label">文件预览</span>：点击上方文件查看路径与大小
+        <span class="label">文件预览</span>：点击文件树中的文件查看内容
       </div>
     </aside>
 
+  </div>
+
+  <!-- 只读文件查看器：点击文件树中的文件打开（Esc / 点遮罩 / 关闭按钮 关闭） -->
+  <div class="file-viewer" id="fileViewer" hidden>
+    <div class="file-viewer-mask" data-close="1"></div>
+    <div class="file-viewer-panel" role="dialog" aria-modal="true" aria-labelledby="fileViewerPath">
+      <div class="file-viewer-head">
+        <span class="file-viewer-path" id="fileViewerPath">—</span>
+        <span class="file-viewer-meta" id="fileViewerMeta"></span>
+        <span class="file-viewer-dirty" id="fileViewerDirty" hidden>● 未保存</span>
+        <button type="button" class="key-btn" id="fileViewerDownload" hidden>另存为</button>
+        <button type="button" class="key-btn" id="fileViewerSave" hidden>保存</button>
+        <button type="button" class="key-btn" id="fileViewerClose">关闭</button>
+      </div>
+      <textarea class="file-viewer-body" id="fileViewerBody" spellcheck="false" wrap="off"></textarea>
+    </div>
   </div>
 
   <!-- 底部：模型设置 + 输入 -->
@@ -106,11 +128,25 @@
         <span class="slider-value" id="tempValue">0.7</span>
         <input type="range" id="tempSlider" min="0" max="1" step="0.1" value="0.7">
       </div>
-      <div class="setting-chip">
-        <span class="key-display">
-          ⚿ <span id="keyMasked">sk-••••••</span>
-          <span class="key-toggle" id="keyToggle" title="显示/隐藏">👁</span>
-        </span>
+      <!-- 高级：可选下拉（前端占位，待后端字段接入后生效） -->
+      <div class="setting-chip" title="高级执行选项（当前为前端占位，待后端字段接入）">
+        高级
+        <select id="advancedSelect">
+          <option value="default">默认</option>
+          <option value="detailed">详细</option>
+          <option value="concise">精简</option>
+        </select>
+      </div>
+      <!-- API 密钥：未配置时显示输入框；配置后只显示掩码 + 删除按钮，永不回显明文 -->
+      <div class="setting-chip key-chip" id="apiKeyInputChip">
+        <span class="key-display">⚿</span>
+        <input type="password" id="apiKeyInput" class="key-input" placeholder="输入 API 密钥"
+               autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="API 密钥">
+        <button type="button" class="key-btn" id="apiKeySave">保存</button>
+      </div>
+      <div class="setting-chip" id="apiKeyStatusChip" hidden>
+        <span class="key-display">⚿ 已保存 <span id="apiKeyMasked">—</span></span>
+        <button type="button" class="key-btn key-btn-danger" id="apiKeyDelete">删除密钥</button>
       </div>
       <div class="setting-chip">
         <label class="toggle">
@@ -119,7 +155,13 @@
         </label>
         LLM 拆分
       </div>
-      <div class="setting-chip">高级 ▾</div>
+      <div class="setting-chip" title="开启后副结构将进行自我检测与更新">
+        <label class="toggle">
+          <input type="checkbox" id="selfCheckToggle">
+          <span class="toggle-track"></span>
+        </label>
+        副结构自检
+      </div>
     </div>
 
     <div class="input-row">

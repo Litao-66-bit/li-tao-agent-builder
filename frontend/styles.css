@@ -315,6 +315,16 @@ body {
 .tree-node.depth-2 { padding-left: 39px; }
 .tree-node.depth-2::before { left: 27px; }
 .tree-node.depth-2::after { left: 27px; width: 8px; }
+/* 折叠容器与目录/文件行 */
+.tree-children.collapsed { display: none; }
+.tree-caret {
+  display: inline-block;
+  width: 10px;
+  color: #57606a;
+}
+.tree-dir { font-weight: 600; }
+.tree-file:hover { border-color: #218bff; }
+.tree-size { color: #8b949e; font-size: 10px; }
 .new-badge {
   background: #2da44e;
   color: #fff;
@@ -334,6 +344,20 @@ body {
   margin-top: 8px;
 }
 .file-preview .label { color: #218bff; font-weight: 600; }
+
+/* 选择本地文件 */
+.local-file-bar { margin-top: 8px; }
+.local-file-btn {
+  width: 100%;
+  border: 1px dashed #d0d7de;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: #218bff;
+  cursor: pointer;
+}
+.local-file-btn:hover { background: #f6f8fa; border-color: #218bff; }
 
 /* ── 底部模型设置 + 输入 ── */
 .bottom-bar {
@@ -381,12 +405,33 @@ body {
   gap: 4px;
   color: #57606a;
 }
-.key-toggle {
-  cursor: pointer;
-  user-select: none;
-  opacity: .6;
+/* ── 密钥输入区 ── */
+.key-chip { gap: 6px; }
+.key-input {
+  width: 132px;
+  border: none;
+  background: transparent;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: #24292f;
+  outline: none;
 }
-.key-toggle:hover { opacity: 1; }
+.key-input::placeholder { color: #8b949e; }
+.key-btn {
+  border: 1px solid #d0d7de;
+  background: #fff;
+  border-radius: 14px;
+  padding: 1px 10px;
+  font-size: 11px;
+  color: #218bff;
+  cursor: pointer;
+}
+.key-btn:hover { background: #f6f8fa; }
+.key-btn:disabled { opacity: .4; cursor: not-allowed; }
+.key-btn:disabled:hover { background: #fff; }
+.key-btn-danger { color: #cf222e; }
+/* hidden 需显式声明，否则 .setting-chip 的 display:flex 会覆盖 UA 的 [hidden] */
+.setting-chip[hidden] { display: none; }
 .token-stats { margin-left: auto; color: #57606a; }
 .token-stats .danger { color: #cf222e; }
 
@@ -435,6 +480,81 @@ body {
   border: none;
 }
 .btn-send:hover { opacity: .9; }
+
+/* ── 只读文件查看器 ── */
+.file-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* hidden 需显式声明，否则上面的 display:flex 会覆盖 UA 的 [hidden] */
+.file-viewer[hidden] { display: none; }
+.file-viewer-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(31, 35, 40, .45);
+}
+.file-viewer-panel {
+  position: relative;
+  width: min(860px, 92vw);
+  max-height: 84vh;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(31, 35, 40, .25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.file-viewer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #eaeef2;
+}
+.file-viewer-path {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: #24292f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-viewer-meta {
+  font-size: 11px;
+  color: #8b949e;
+  margin-right: auto;
+  flex-shrink: 0;
+}
+.file-viewer-dirty {
+  font-size: 11px;
+  color: #9a6700;
+  flex-shrink: 0;
+}
+/* hidden 需显式声明，否则会被上面的 flex/inline 布局影响 */
+.file-viewer-dirty[hidden],
+.file-viewer-head .key-btn[hidden] { display: none; }
+.file-viewer-body {
+  flex: 1;
+  min-height: 45vh;
+  margin: 0;
+  padding: 12px 14px;
+  border: none;
+  outline: none;
+  resize: none;
+  overflow: auto;
+  background: #fff;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #24292f;
+  white-space: pre;
+}
+.file-viewer-body[readonly] { background: #f6f8fa; }
 
 /* ── 响应式 ── */
 /* 仅在极窄屏（手机）隐藏侧边栏；平板/桌面始终显示三栏 */

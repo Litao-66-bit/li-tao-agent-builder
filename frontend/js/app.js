@@ -148,36 +148,194 @@ function appendInterruptCard() {
 
 /* ──────────────── 文件树渲染 ──────────────── */
 
-/** 递归渲染文件树节点 */
+/** 递归渲染文件树：目录可折叠，文件可点击打开。 */
 function renderFileTree(nodes, container, depth = 0) {
   nodes.forEach((node) => {
-    const div = document.createElement('div');
-    div.className = `tree-node depth-${depth}`;
-    const icon = node.type === 'dir' ? '📁' : '📄';
-    const sizeLabel = node.type === 'file' && node.size != null
-      ? ` <span style="color:#8b949e;font-size:10px;">${formatSize(node.size)}</span>`
-      : '';
-    div.innerHTML = `${icon} ${escapeHtml(node.name)}${sizeLabel}`;
-    div.title = node.path;
-    if (node.type === 'file') {
-      div.addEventListener('click', () => showFilePreview(node));
-    }
-    container.appendChild(div);
-    if (node.children && node.children.length > 0) {
-      renderFileTree(node.children, container, depth + 1);
+    const row = document.createElement('div');
+    row.className = `tree-node depth-${depth}${node.type === 'dir' ? ' tree-dir' : ' tree-file'}`;
+    row.title = node.path;
+
+    if (node.type === 'dir') {
+      row.innerHTML = `<span class="tree-caret">▾</span> 📁 ${escapeHtml(node.name)}`;
+      container.appendChild(row);
+
+      // 子节点放进独立容器，便于整块折叠/展开。
+      const childBox = document.createElement('div');
+      childBox.className = 'tree-children';
+      container.appendChild(childBox);
+      renderFileTree(node.children || [], childBox, depth + 1);
+
+      row.addEventListener('click', () => {
+        const collapsed = childBox.classList.toggle('collapsed');
+        row.querySelector('.tree-caret').textContent = collapsed ? '▸' : '▾';
+      });
+    } else {
+      const sizeLabel = node.size != null
+        ? ` <span class="tree-size">${formatSize(node.size)}</span>`
+        : '';
+      row.innerHTML = `📄 ${escapeHtml(node.name)}${sizeLabel}`;
+      row.addEventListener('click', () => openWorkspaceFile(node));
+      container.appendChild(row);
     }
   });
 }
 
-/** 展示文件预览（当前仅展示路径与大小，内容预览需后端接口支持）。 */
-function showFilePreview(node) {
-  const preview = document.getElementById('filePreview');
-  if (!preview) return;
-  const sizeText = node.size != null ? formatSize(node.size) : '—';
-  preview.innerHTML = `<span class="label">文件预览</span>：${escapeHtml(node.path)}<br>`
-    + `大小：${sizeText}<br>`
-    + '<span style="color:#8b949e;">（内容预览需后端接口支持）</span>';
+/* ──────────────── 文件查看/编辑 ────────────────
+ * 两种模式：
+ * - 工作区文件：可编辑，点「保存」写回后端（超大可编辑上限的文件降级为只读预览）；
+ * - 本地文件：可编辑，点「另存为」下载修改后的副本（浏览器无法直接写回本地路径）。
+ */
+
+const fileViewer = document.getElementById('fileViewer');
+const fileViewerPath = document.getElementById('fileViewerPath');
+const fileViewerMeta = document.getElementById('fileViewerMeta');
+const fileViewerDirty = document.getElementById('fileViewerDirty');
+const fileViewerSave = document.getElementById('fileViewerSave');
+const fileViewerDownload = document.getElementById('fileViewerDownload');
+const fileViewerBody = document.getElementById('fileViewerBody');
+
+// 当前打开的文件：viewerWorkspacePath 为工作区相对路径；viewerLocalName 为本地文件名。
+let viewerWorkspacePath = null;
+let viewerLocalName = '';
+let viewerDirty = false;
+
+/** 标记「有未保存修改」。 */
+function setViewerDirty(dirty) {
+  viewerDirty = dirty;
+  fileViewerDirty.hidden = !dirty;
 }
+
+/** 复位查看器状态并清空内容（默认只读）。 */
+function resetViewer() {
+  viewerWorkspacePath = null;
+  viewerLocalName = '';
+  fileViewerDirty.hidden = true;
+  viewerDirty = false;
+  fileViewerSave.hidden = true;
+  fileViewerDownload.hidden = true;
+  fileViewerSave.disabled = false;
+  fileViewerBody.value = '';
+  fileViewerBody.readOnly = true;
+}
+
+/** 关闭查看器；有未保存修改时先二次确认。 */
+function closeFileViewer(force) {
+  if (viewerDirty && !force && !window.confirm('有未保存的修改，确定关闭吗？')) return;
+  fileViewer.hidden = true;
+  resetViewer();
+}
+
+/** 打开工作区文件：可编辑则显示「保存」；超出可编辑上限则只读截断预览。 */
+async function openWorkspaceFile(node) {
+  fileViewer.hidden = false;
+  resetViewer();
+  viewerWorkspacePath = node.path;
+  fileViewerPath.textContent = node.path;
+  fileViewerMeta.textContent = node.size != null ? formatSize(node.size) : '';
+  fileViewerBody.value = '加载中…';
+  try {
+    const file = await api.readWorkspaceFile(node.path);
+    fileViewerBody.value = file.content;
+    if (file.truncated) {
+      // 内容已被截断，禁止编辑，避免把残缺内容覆盖回原文件。
+      fileViewerBody.readOnly = true;
+      fileViewerMeta.textContent = `${formatSize(file.size)} · 过大，仅只读预览`;
+    } else {
+      fileViewerBody.readOnly = false;
+      fileViewerSave.hidden = false;
+      fileViewerMeta.textContent = formatSize(file.size);
+    }
+    setViewerDirty(false); // 程序赋值不触发 input，这里显式复位
+  } catch (err) {
+    fileViewerBody.value = `无法打开文件：${err.message}`;
+    fileViewerBody.readOnly = true;
+  }
+}
+
+/** 保存当前工作区文件（覆盖写，仅限已存在文件）。 */
+async function handleViewerSave() {
+  if (!viewerWorkspacePath) return;
+  fileViewerSave.disabled = true;
+  try {
+    const file = await api.writeWorkspaceFile(viewerWorkspacePath, fileViewerBody.value);
+    fileViewerMeta.textContent = `${formatSize(file.size)} · 已保存`;
+    setViewerDirty(false);
+    appendMessage('agent', `已保存文件：${file.path}`);
+  } catch (err) {
+    fileViewerMeta.textContent = `保存失败：${err.message}`;
+    appendMessage('agent', `❌ 保存失败：${err.message}`);
+  } finally {
+    fileViewerSave.disabled = false;
+  }
+}
+
+/** 「另存为」：把编辑后的本地文件内容下载为副本（浏览器不能写回原路径）。 */
+function handleViewerDownload() {
+  if (!viewerLocalName) return;
+  const blob = new Blob([fileViewerBody.value], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = viewerLocalName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setViewerDirty(false);
+}
+
+fileViewerBody.addEventListener('input', () => {
+  if (!fileViewerBody.readOnly) setViewerDirty(true);
+});
+fileViewerSave.addEventListener('click', handleViewerSave);
+fileViewerDownload.addEventListener('click', handleViewerDownload);
+document.getElementById('fileViewerClose').addEventListener('click', () => closeFileViewer());
+fileViewer.addEventListener('click', (e) => {
+  if (e.target.dataset && e.target.dataset.close) closeFileViewer();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !fileViewer.hidden) closeFileViewer();
+});
+
+/* ──────────────── 选择本地文件（纯前端读取，不上传） ──────────────── */
+
+// 本地文件可打开上限：超过则只给提示，避免超大文件卡死浏览器。
+const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
+
+const localFileInput = document.getElementById('localFileInput');
+const localFileBtn = document.getElementById('localFileBtn');
+
+/** 打开本地文件：可编辑，「另存为」下载副本；不上传、不落盘、不发请求。 */
+function openLocalFile(file) {
+  fileViewer.hidden = false;
+  resetViewer();
+  viewerLocalName = file.name;
+  fileViewerPath.textContent = `${file.name}（本地）`;
+  fileViewerMeta.textContent = formatSize(file.size);
+  if (file.size > MAX_LOCAL_FILE_BYTES) {
+    fileViewerBody.value = `文件过大（${formatSize(file.size)}），超过本地可打开上限 ${formatSize(MAX_LOCAL_FILE_BYTES)}。`;
+    fileViewerBody.readOnly = true;
+    return;
+  }
+  fileViewerBody.readOnly = false;
+  fileViewerDownload.hidden = false;
+  fileViewerBody.value = '读取中…';
+  const reader = new FileReader();
+  reader.onload = () => {
+    fileViewerBody.value = String(reader.result);
+    setViewerDirty(false);
+  };
+  reader.onerror = () => { fileViewerBody.value = '读取本地文件失败。'; };
+  reader.readAsText(file);
+}
+
+localFileBtn.addEventListener('click', () => localFileInput.click());
+localFileInput.addEventListener('change', () => {
+  const file = localFileInput.files && localFileInput.files[0];
+  // 清空 value，保证连续选择同一个文件也能再次触发 change。
+  localFileInput.value = '';
+  if (file) openLocalFile(file);
+});
 
 /** 格式化文件大小 */
 function formatSize(bytes) {
@@ -200,7 +358,8 @@ async function loadFileTree() {
     }
     renderFileTree(nodes, tree);
   } catch (err) {
-    tree.innerHTML = `<div class="tree-node depth-0" style="color:#cf222e;">❌ ${escapeHtml(err.message)}</div>`;
+    tree.innerHTML = `<div class="tree-node depth-0" style="color:#cf222e;">❌ ${escapeHtml(err.message)}</div>`
+      + '<div class="tree-node depth-0" style="color:#57606a;font-size:10px;">启动后端：python -m uvicorn agent_builder.api.app:create_app --factory --reload --port 8000</div>';
   }
 }
 
@@ -370,19 +529,94 @@ slider.addEventListener('input', () => {
   tempValue.textContent = parseFloat(slider.value).toFixed(1);
 });
 
-// 密钥显示/隐藏
-const keyToggle = document.getElementById('keyToggle');
-const keyMasked = document.getElementById('keyMasked');
-let keyVisible = false;
-keyToggle.addEventListener('click', () => {
-  keyVisible = !keyVisible;
-  keyMasked.textContent = keyVisible ? 'sk-abc123def456...' : 'sk-••••••';
-  keyToggle.textContent = keyVisible ? '🙈' : '👁';
+// 模型切换
+document.getElementById('modelSelect').addEventListener('change', (e) => {
+  console.log('切换模型:', e.target.value);
 });
 
-// 技能 toggle
-document.querySelectorAll('.toggle input').forEach((t) => {
+// 高级选项切换
+document.getElementById('advancedSelect').addEventListener('change', (e) => {
+  console.log('高级选项:', e.target.value);
+});
+
+/* ──────────────── API 密钥管理（安全优先） ────────────────
+ * 原则：
+ * 1. 明文只在输入框中短暂停留，提交后立即清空输入框；
+ * 2. 服务端只回传「是否已配置 + 掩码」，前端不再持有明文；
+ * 3. 不写入 localStorage / sessionStorage，不做「显示密钥」功能。
+ */
+
+const apiKeyInputChip = document.getElementById('apiKeyInputChip');
+const apiKeyStatusChip = document.getElementById('apiKeyStatusChip');
+const apiKeyInput = document.getElementById('apiKeyInput');
+const apiKeyMasked = document.getElementById('apiKeyMasked');
+
+/** 按服务端状态切换密钥区域形态：已配置 → 只显示掩码 + 删除按钮。 */
+function renderApiKeyStatus(status) {
+  const configured = Boolean(status && status.configured);
+  apiKeyInputChip.hidden = configured;
+  apiKeyStatusChip.hidden = !configured;
+  if (configured) {
+    apiKeyMasked.textContent = status.masked || '已配置';
+  } else {
+    apiKeyInput.value = ''; // 未配置时不留任何残留明文
+  }
+}
+
+/** 查询密钥状态；后端未就绪时保持「可输入」形态，不阻塞启动。 */
+async function loadApiKeyStatus() {
+  try {
+    renderApiKeyStatus(await api.getApiKeyStatus());
+  } catch {
+    renderApiKeyStatus({ configured: false });
+  }
+}
+
+/** 保存密钥：先清空输入框，再按服务端状态渲染，绝不回显。 */
+async function handleApiKeySave() {
+  const raw = apiKeyInput.value;
+  if (!raw.trim()) return;
+  try {
+    const status = await api.setApiKey(raw.trim());
+    apiKeyInput.value = ''; // 无论成败都立即清空，避免明文驻留
+    renderApiKeyStatus(status);
+    appendMessage('agent', 'API 密钥已保存到后端（仅驻留内存，不回显）。如需移除可点击「删除密钥」。');
+  } catch (err) {
+    apiKeyInput.value = '';
+    appendMessage('agent', `❌ 密钥保存失败：${err.message}`);
+  }
+}
+
+/** 删除密钥：二次确认，确认文案不包含任何密钥内容。 */
+async function handleApiKeyDelete() {
+  if (!window.confirm('确定删除已保存的 API 密钥吗？删除后不可恢复，需要重新输入。')) return;
+  try {
+    const status = await api.deleteApiKey();
+    renderApiKeyStatus(status);
+    appendMessage('agent', 'API 密钥已删除。');
+  } catch (err) {
+    appendMessage('agent', `❌ 密钥删除失败：${err.message}`);
+  }
+}
+
+document.getElementById('apiKeySave').addEventListener('click', handleApiKeySave);
+document.getElementById('apiKeyDelete').addEventListener('click', handleApiKeyDelete);
+apiKeyInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    handleApiKeySave();
+  }
+});
+
+// 技能 toggle（仅左栏技能开关）
+document.querySelectorAll('.sidebar-left .toggle input').forEach((t) => {
   t.addEventListener('change', () => console.log('技能开关:', t.checked));
+});
+
+// 副结构自检更新开关
+const selfCheckToggle = document.getElementById('selfCheckToggle');
+selfCheckToggle?.addEventListener('change', () => {
+  console.log('副结构自检更新:', selfCheckToggle.checked);
 });
 
 // 新建项目按钮
@@ -406,4 +640,5 @@ document.querySelector('.file-refresh-btn')?.addEventListener('click', loadFileT
   }
   updateStageBar('received');
   loadFileTree();
+  loadApiKeyStatus();
 })();
