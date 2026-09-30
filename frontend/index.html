@@ -74,20 +74,16 @@
     <aside class="sidebar-right">
       <div class="file-header">
         <span class="file-title">📁 工作区文件</span>
-        <span class="file-upload-btn">↻ 上传</span>
+        <span class="file-refresh-btn" title="重新拉取工作区文件树">↻ 刷新</span>
       </div>
       <div class="file-path">工作区 / workspace</div>
 
       <div class="file-tree">
-        <div class="tree-node depth-0">📄 README.md</div>
-        <div class="tree-node depth-0">📁 agent_builder/</div>
-        <div class="tree-node depth-1">└─ tools/ · graph/ · llm/</div>
-        <div class="tree-node depth-0 new">📄 poster.md <span class="new-badge">NEW</span></div>
+        <div class="tree-node depth-0">⟳ 加载中…</div>
       </div>
 
-      <div class="file-preview">
-        <span class="label">文件预览</span>：poster.md<br>
-        # 宣传海报生成 Agent…（只读）
+      <div class="file-preview" id="filePreview">
+        <span class="label">文件预览</span>：点击上方文件查看路径与大小
       </div>
     </aside>
 
@@ -116,8 +112,14 @@
           <span class="key-toggle" id="keyToggle" title="显示/隐藏">👁</span>
         </span>
       </div>
+      <div class="setting-chip">
+        <label class="toggle">
+          <input type="checkbox" id="llmToggle">
+          <span class="toggle-track"></span>
+        </label>
+        LLM 拆分
+      </div>
       <div class="setting-chip">高级 ▾</div>
-      <div class="token-stats">token 1,234 · ≈¥0.06 · <span class="danger">剩余 38 次</span></div>
     </div>
 
     <div class="input-row">

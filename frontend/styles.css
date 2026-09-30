@@ -210,6 +210,8 @@ body {
 .tool-status.success { background: #dafbe1; color: #1a7f37; }
 .tool-status.failed { background: #ffebe9; color: #cf222e; }
 .tool-status.running { background: #ddf4ff; color: #0969da; }
+.tool-status.pending { background: #f6f8fa; color: #57606a; border: 1px solid #d0d7de; }
+.tool-status.pending_approval { background: #fff8c5; color: #9a6700; }
 .tool-card-detail { font-size: 12px; color: #57606a; margin-top: 2px; }
 
 /* 审批弹窗 */
@@ -239,8 +241,10 @@ body {
   transition: opacity .15s;
 }
 .btn:hover { opacity: .85; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
 .btn-approve { background: #cf222e; color: #fff; font-weight: 600; }
 .btn-reject { background: #fff; border: 1px solid #d0d7de; }
+.btn-resume { background: #2da44e; color: #fff; font-weight: 600; }
 
 /* ── 右栏文件框 ── */
 .sidebar-right {
@@ -308,6 +312,9 @@ body {
 .tree-node.depth-1 { padding-left: 24px; }
 .tree-node.depth-1::before { left: 12px; }
 .tree-node.depth-1::after { left: 12px; width: 8px; }
+.tree-node.depth-2 { padding-left: 39px; }
+.tree-node.depth-2::before { left: 27px; }
+.tree-node.depth-2::after { left: 27px; width: 8px; }
 .new-badge {
   background: #2da44e;
   color: #fff;
@@ -414,6 +421,8 @@ body {
   cursor: pointer;
 }
 .btn-secondary:hover { background: #f6f8fa; }
+.btn-secondary:disabled { opacity: .4; cursor: not-allowed; }
+.btn-secondary:disabled:hover { background: #fff; }
 .btn-send {
   background: linear-gradient(135deg, #218bff, #388bfd);
   color: #fff;
