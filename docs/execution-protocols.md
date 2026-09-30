@@ -560,14 +560,23 @@ decomposer 产出步骤 DAG 后调用。
 
 ### 实现说明
 
-**已实现**为 `agent_builder/tools/gatekeeper.py` 的 `ToolGatekeeper` 类。
+**实现分两层**：
 
-核心校验流程：
+- **工具层（校验内核）**：`agent_builder/tools/gatekeeper.py` 的 `ToolGatekeeper` 类 —— 所有角色工具调用的唯一出口。
+- **角色层（Agent）**：`agent_builder/roles/tool_guardian.py` 的 `ToolGuardian` 类 —— 按本规范实现为可调度的 Agent，包装上述内核，并补齐注入预检、高风险转审批门与「结果 + 耗时」审计。
+
+核心校验流程（`ToolGatekeeper`）：
 1. 角色权限校验（角色未注册 / 工具未列入白名单 → E_PERMISSION，永不重试）
 2. 高风险工具审批门（file_write / git_commit / rollback 需审批）
 3. 文件类工具沙箱路径校验（realpath 必须在白名单目录内）
 4. 网络类工具 URL 安全校验（防 SSRF，禁私有网段）
 5. 写审计日志（谁调的、参数、结果、耗时）
+
+角色层执行协议（`ToolGuardian.guard`）：
+1. 注入预检：args 命中注入模式 → 拒绝 + 标记事件上报审计员
+2. 高风险动作且无审批人 → 转审批门（pending_approval）
+3. 白名单 + 参数安全：复用 `ToolGatekeeper`
+4. 放行后交给 executor_fn 执行，并写审计日志（谁调的、参数、结果、耗时）
 
 ### 校验分支
 
