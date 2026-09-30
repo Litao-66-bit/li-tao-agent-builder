@@ -26,6 +26,22 @@ class InterruptRequest(BaseModel):
     reason: str = Field(default="user_stop", description="中断原因")
 
 
+class ApiKeyRequest(BaseModel):
+    """设置 API 密钥请求。
+
+    密钥明文只在本次请求体内出现，服务端仅存内存、不回显、不落盘。
+    """
+
+    api_key: str = Field(description="API 密钥明文（服务端仅内存保存，不回显）")
+
+
+class ApiKeyStatusResponse(BaseModel):
+    """API 密钥状态响应（绝不包含密钥明文）。"""
+
+    configured: bool = Field(description="是否已保存密钥")
+    masked: str | None = Field(default=None, description="掩码提示，如 sk-***；未配置为 null")
+
+
 class StepResult(BaseModel):
     """单个步骤的执行结果（用于回传给前端）。"""
 
@@ -74,6 +90,24 @@ class FileNode(BaseModel):
     children: list[FileNode] = Field(default_factory=list)
 
 
+class FileContentResponse(BaseModel):
+    """文件内容响应（只读预览）。
+
+    只返回工作区相对路径，绝不返回服务端绝对路径。
+    """
+
+    path: str = Field(description="工作区相对路径")
+    size: int = Field(description="文件大小（字节）")
+    content: str = Field(description="UTF-8 文本内容")
+    truncated: bool = Field(default=False, description="文件过大被截断（截断后前端禁止编辑）")
+
+
+class FileWriteRequest(BaseModel):
+    """写回文件内容请求（只允许覆盖已存在的工作区文件）。"""
+
+    content: str = Field(description="要写入的 UTF-8 文本内容")
+
+
 class ErrorResponse(BaseModel):
     """错误响应。"""
 
@@ -84,9 +118,13 @@ class ErrorResponse(BaseModel):
 
 
 __all__ = [
+    "ApiKeyRequest",
+    "ApiKeyStatusResponse",
     "DecomposeResponse",
     "ErrorResponse",
+    "FileContentResponse",
     "FileNode",
+    "FileWriteRequest",
     "InterruptRequest",
     "PlanRequest",
     "StepResult",

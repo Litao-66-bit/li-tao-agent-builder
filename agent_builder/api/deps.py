@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
+from agent_builder.api.secrets import get_api_key_store
 from agent_builder.api.store import InMemoryTaskStore
 from agent_builder.llm.client import LLMClient
 from agent_builder.llm.config import LLMConfig
@@ -27,8 +29,15 @@ def reset_store() -> None:
 
 
 def get_llm_client() -> LLMClient | None:
-    """从环境变量构造 LLM 客户端；无密钥返回 None。"""
+    """构造 LLM 客户端。
+
+    密钥来源优先级：运行时存储（前端提交）> 环境变量 DEEPSEEK_API_KEY。
+    两者皆无时返回 None（调用方降级为待确认模式）。
+    """
     config = LLMConfig.from_env()
+    runtime_key = get_api_key_store().get()
+    if runtime_key:
+        config = replace(config, api_key=runtime_key)
     client = LLMClient(config)
     return client if client.is_available else None
 
