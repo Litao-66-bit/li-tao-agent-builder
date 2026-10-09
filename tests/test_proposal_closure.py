@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 from typing import Any
 
@@ -232,8 +233,17 @@ class TestScaffold:
         assert (tmp_path / SCAFFOLD_ROOT / "t-1-p1/README.md").exists()
 
     def test_拒绝越界路径(self, tmp_path) -> None:
-        """沙箱校验：生成路径不得跳出工作区（与工具门卫同口径）。"""
-        for bad in ("../escape.py", "C:/Windows/evil.py", "/etc/passwd"):
+        """沙箱校验：生成路径不得跳出工作区（与工具门卫同口径）。
+
+        跨平台坑（实测 CI run #67）：``C:/Windows/evil.py`` 在 Windows 是**绝对路径**（越界 ✓），
+        但在 POSIX 上只是一个名为 ``C:`` 的**相对目录**（并未越界 ✗）—— 这条断言只在 Windows
+        成立，于是 ubuntu-latest 上必然失败，而 Windows 本地一直绿。
+        越界样本要按平台给：POSIX 用 ``/`` 开头的绝对路径，Windows 再补盘符样本。
+        """
+        bad_paths = ["../escape.py", "/etc/passwd"]
+        if os.name == "nt":
+            bad_paths.append("C:/Windows/evil.py")
+        for bad in bad_paths:
             result = write_scaffold(tmp_path, {bad: "x"})
             assert result.files == []
             assert result.error is not None
