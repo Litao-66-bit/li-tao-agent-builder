@@ -28,7 +28,7 @@
 ## 特性
 
 - **需求驱动**：只用一句话描述“我想要一个 XX 的 Agent”，剩下的交给 Meta Agent
-- **框架可插拔**：默认基于 LangGraph，可扩展 Agno / CrewAI 等
+- **自研编排，不依赖编排框架**：agentic 循环（`api/agent_loop.py`）、决策器（`api/deciders.py`）、角色与工具调度都在本仓库内实现；模型传输层用 `langchain-openai` 的 OpenAI 兼容客户端（DeepSeek 走同一协议）
 - **模型多路线**：API 托管（DeepSeek / 豆包 / 通义 / OpenAI）或本地开源模型（Ollama）
 - **开箱即用的工程基线**：Lint（Ruff）+ 测试（pytest）+ CI（GitHub Actions）
 - **文件级开源**：MPL-2.0，允许与闭源代码混合使用（详见[许可证](#许可证)）
@@ -71,7 +71,7 @@ cp .env.example .env
 ### 运行
 
 ```bash
-# 冒烟测试（不调用任何模型，CI 同款）
+# 完整测试套件（不调用任何模型，CI 同款）
 pytest
 
 # 入口示例（需要 .env 中已配置密钥）
@@ -99,12 +99,19 @@ ollama pull qwen2.5:7b
 ```
 .
 ├── agent_builder/            # 核心包
-│   └── __init__.py
+│   ├── api/                  # HTTP 接口 + agentic 循环 / 决策器 / 任务存储 / 密钥管理
+│   ├── contracts/            # 契约层：状态机 / 消息协议 / 错误码 / Schema
+│   ├── roles/                # 角色层（规划 / 执行 / 验证 / 记忆 / 审计 …）
+│   ├── tools/                # 工具门卫 + 工具实现（沙箱 / 权限 / 审批 / 审计）
+│   ├── llm/                  # 模型客户端与预算
+│   └── evaluation/           # 评分卡与 A/B 评估
+├── frontend/                 # 零构建前端（原生 JS，无打包步骤）
 ├── tests/                    # pytest 测试（CI 会执行）
-│   └── test_smoke.py
+├── docs/                     # 交接文档 / 设计 / 报告
 ├── .github/workflows/ci.yml  # GitHub Actions 持续集成
 ├── .env.example              # 密钥模板（真实密钥放 .env，不入库）
 ├── pyproject.toml            # 项目元数据与依赖
+├── requirements.lock         # 锁定版本（uv 生成，CI 按它安装）
 ├── LICENSE                   # MPL-2.0
 └── README.md
 ```
@@ -114,19 +121,22 @@ ollama pull qwen2.5:7b
 `.github/workflows/ci.yml` 在每次 `push` 和 `pull_request` 时自动运行：
 
 - Python 3.10 / 3.11 / 3.12 三版本矩阵
-- `pip install -e ".[dev]"` 安装依赖
-- `ruff check .` 代码规范检查
-- `pytest` 测试套件（无需 API Key，CI 可离线跑通）
+- `pip install -r requirements.lock` + `pip install -e . --no-deps`（与 lock 一致的可复现安装）
+- `ruff check .` 代码规范检查（全仓库范围）
+- `pytest -v` 测试套件（无需 API Key，CI 可离线跑通）
 
 首次推送后到仓库 **Actions** 页面即可看到流水线；徽章默认显示 `main` 分支结果。
 
 ## Roadmap
 
-- [ ] 规划模块：Agent 类型与工具选型
-- [ ] 生成模块：代码 + 配置 + 提示词模板
-- [ ] 沙箱验证：隔离运行生成物
-- [ ] Web 控制台（可选，Node 前端）
-- [ ] 模板市场：共享/复用 Agent 模板
+- [x] 规划模块：Agent 类型与工具选型（`roles/` + 能力目录）
+- [x] 生成模块：代码 + 配置 + 提示词模板
+- [x] 沙箱验证：隔离运行生成物（`tools/impl/sandbox_run.py` + 工具门卫）
+- [x] agentic 循环：逐轮「决策 → 执行 → 观察」，含空转 / 重复失败闸门与系统纠正
+- [x] 局部编辑能力：`file_edit`（精确替换，避免整份重写）
+- [ ] Web 控制台（可选，Node 前端）—— 当前是零构建原生前端（`frontend/`）
+- [ ] 模板市场：共享 / 复用 Agent 模板
+- [ ] 产物输出根目录策略：把 agent 产出隔离到工作区子目录，避免污染仓库根与 lint 范围
 
 ## 贡献
 
