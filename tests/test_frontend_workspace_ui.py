@@ -961,15 +961,17 @@ class TestMarkdownRendering:
     def test_代码块复制有委托处理(self) -> None:
         source = _read("frontend/js/app.js")
         assert ".md-copy" in source
-        assert "copyToClipboard(code.textContent)" in source
+        # 复制走统一封装 copyWithFeedback(按钮, 文本)；代码块取同一张卡里的 code
+        assert "copyWithFeedback(codeBtn, code.textContent)" in source
 
     def test_样式覆盖_md_正文与代码卡(self) -> None:
         css = _read("frontend/styles.css")
         for selector in (".md p {", ".md table {", ".md-code {", ".md-copy {"):
             assert selector in css, f"styles.css 缺少 {selector}"
         # Markdown 正文不能沿用 pre-wrap（标签间换行会被渲染成多余空行）
-        assert ".md {" in css
-        start = css.index(".md {")
+        # 注意：`.msg-agent .bubble.md {` 里也含 `.md {` 子串 → 必须匹配**行首**那条规则
+        assert "\n.md {" in css
+        start = css.index("\n.md {")
         assert "white-space: normal" in css[start : start + 200]
 
     def test_代码块与表格样式只用token(self) -> None:
@@ -1039,6 +1041,55 @@ class TestMarkdownRenderingBehavior:
         # XSS：样本里的 <script> 只能以实体形式出现
         assert "<script>" not in out
         assert "&lt;script&gt;" in out
+
+
+class TestChatStickToBottom:
+    """对话区「贴底才跟随」：用户往上读时，新节点不该把人硬拽回底部。
+
+    实测问题：`mountChatNode` 原先无条件 `scrollTop = scrollHeight` —— 结论变长后，一边读
+    一边被新步骤拽回底部，体感很差。DeepSeek 网页版是"本来就贴底才跟随"。
+    """
+
+    def test_挂载节点不再无条件吸底(self) -> None:
+        source = _read("frontend/js/app.js")
+        body = _function_body(source, "mountChatNode")
+        assert "scrollChatToBottom(false)" in body
+        assert "scrollTop = area.scrollHeight" not in body
+
+    def test_贴近底部的判定存在(self) -> None:
+        source = _read("frontend/js/app.js")
+        body = _function_body(source, "isChatNearBottom")
+        assert "scrollHeight" in body
+        assert "clientHeight" in body
+        assert "CHAT_STICK_THRESHOLD_PX" in body
+
+    def test_用户主动发消息时强制跟到底(self) -> None:
+        source = _read("frontend/js/app.js")
+        assert "scrollChatToBottom(true)" in _function_body(source, "appendMessage")
+
+
+class TestConclusionCopyTool:
+    """结论区：助手回答整宽 + 「复制」**原始** Markdown。"""
+
+    def test_结论块带复制按钮并保存原始文本(self) -> None:
+        source = _read("frontend/js/app.js")
+        body = _function_body(source, "renderConclusion")
+        assert "msg-copy" in body
+        # 渲染后再取 textContent 会丢列表/表格换行 → 复制必须用原始文本
+        assert "dataset.raw = text" in body
+
+    def test_复制处理优先取原始文本(self) -> None:
+        source = _read("frontend/js/app.js")
+        assert "dataset.raw" in source
+        assert "copyWithFeedback" in source
+        assert ".md-copy" in source and ".msg-copy" in source
+
+    def test_助手整宽样式只用token(self) -> None:
+        css = _read("frontend/styles.css")
+        assert ".msg-agent .bubble.md {" in css
+        block = css[css.index(".msg-agent .bubble.md {") : css.index(".msg-agent .bubble.md {") + 200]
+        assert "max-width: 100%" in block
+        assert "#" not in block
 
 
 class TestFileTreeKeepsCollapsedState:

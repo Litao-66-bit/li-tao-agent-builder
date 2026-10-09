@@ -241,13 +241,31 @@ let trimmed = false;
 // 所有任务的会话记录：taskId → { title, entries, plan }（供切换回看）。
 let taskSessions = {};
 
-/** 把节点挂到对话区并滚动到底。
+/** 对话区「贴底才跟随」的余量：距底不足这么多像素就算"还在跟"。 */
+const CHAT_STICK_THRESHOLD_PX = 80;
+
+/** 对话区是否贴近底部。 */
+function isChatNearBottom(area) {
+  return area.scrollHeight - area.scrollTop - area.clientHeight <= CHAT_STICK_THRESHOLD_PX;
+}
+
+/** 滚到对话区底部；``force`` 用于用户主动触发的场景（发消息 / 切任务）。
+ *
+ * 为什么不再无条件吸底：用户往上翻着读结论时，每来一个新节点都会被硬拽回底部（实测体感很差），
+ * DeepSeek 网页版的做法是"本来就贴底才跟随"。
+ */
+function scrollChatToBottom(force) {
+  const area = document.getElementById('chatArea');
+  if (!area) return;
+  if (force || isChatNearBottom(area)) area.scrollTop = area.scrollHeight;
+}
+
+/** 把节点挂到对话区，并在**本来就贴底**时跟随到底。
  *  插入目标是内层 live region（#chatLog），滚动容器仍是外层 #chatArea。 */
 function mountChatNode(node) {
   const log = document.getElementById('chatLog');
   log.appendChild(node);
-  const area = document.getElementById('chatArea');
-  area.scrollTop = area.scrollHeight;
+  scrollChatToBottom(false);
 }
 
 /* ──────────────── 过程块：默认收起的过程收纳 ──────────────── */
@@ -1105,6 +1123,8 @@ function renderMessage(role, text) {
 /** 在对话区追加一条消息（渲染 + 记录）。 */
 function appendMessage(role, text) {
   renderMessage(role, text);
+  // 用户主动发的话一定跟到底（哪怕他此前正在往上翻）。
+  scrollChatToBottom(true);
   recordEntry({ kind: 'msg', role, text });
   // 计入交接提示计量（用户消息计 turns，所有消息计 chars）。
   accountHandover(role, text);
@@ -1249,28 +1269,56 @@ function renderConclusion(task) {
     label.textContent = '✅ 结论';
     const body = document.createElement('div');
     body.className = 'conclusion-body';
+    // 工具条：复制**原始 Markdown** —— 渲染后再取 textContent 会丢掉列表/表格的换行结构。
+    const tools = document.createElement('div');
+    tools.className = 'msg-tools';
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'msg-copy';
+    copyBtn.textContent = '复制';
+    tools.appendChild(copyBtn);
     conclusionBlockEl.appendChild(label);
     conclusionBlockEl.appendChild(body);
+    conclusionBlockEl.appendChild(tools);
     mountChatNode(conclusionBlockEl);
   }
   const body = conclusionBlockEl.querySelector('.conclusion-body');
   // 结论是模型写给用户看的成品（实际含 Markdown）→ 按子集渲染，与 DeepSeek 网页版一致的观感。
   body.classList.add('md');
   body.innerHTML = renderMarkdown(text);
+  conclusionBlockEl.dataset.raw = text;
 }
 
-// 代码块「复制」：委托到 document，省得每渲染一块就重新绑定一次。
-document.addEventListener('click', async (event) => {
-  const btn = event.target && event.target.closest ? event.target.closest('.md-copy') : null;
-  if (!btn) return;
-  const code = btn.closest('.md-code') ? btn.closest('.md-code').querySelector('code') : null;
-  if (!code) return;
-  await copyToClipboard(code.textContent);
+/** 复制并把按钮短暂改成「已复制」（失败时不改文案，交给 copyToClipboard 自己提示）。 */
+async function copyWithFeedback(btn, text) {
+  const ok = await copyToClipboard(text);
+  if (ok === false) return;
   const original = btn.textContent;
   btn.textContent = '已复制';
   setTimeout(() => {
     btn.textContent = original;
   }, 1200);
+}
+
+// 复制按钮：委托到 document，省得每渲染一块就重新绑定一次。
+// - `.md-copy`：代码块内的复制（取同一张代码卡里的 code）
+// - `.msg-copy`：结论区的复制（取**原始** Markdown，见 renderConclusion 里的 dataset.raw）
+document.addEventListener('click', async (event) => {
+  const target = event.target;
+  if (!target || !target.closest) return;
+  const codeBtn = target.closest('.md-copy');
+  if (codeBtn) {
+    const card = codeBtn.closest('.md-code');
+    const code = card ? card.querySelector('code') : null;
+    if (code) await copyWithFeedback(codeBtn, code.textContent);
+    return;
+  }
+  const msgBtn = target.closest('.msg-copy');
+  if (msgBtn) {
+    const holder = msgBtn.closest('.conclusion-block');
+    const raw = holder && holder.dataset ? holder.dataset.raw : '';
+    if (raw) await copyWithFeedback(msgBtn, raw);
+  }
 });
 
 /** 渲染评审会纪要卡片（只渲染，不写会话记录）。

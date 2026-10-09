@@ -595,6 +595,21 @@ body {
   max-width: 78%;
   color: var(--text-strong);
 }
+/* Markdown 正文（标题 / 表格 / 代码块）在窄气泡里会挤 → 助手回答整宽，与 DeepSeek 网页版一致。 */
+.msg-agent .bubble.md { max-width: 100%; }
+
+/* 消息级工具条（结论区的「复制」）：默认低调，hover 才亮 */
+.msg-tools { display: flex; gap: 8px; margin-top: 6px; }
+.msg-copy {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface-2);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.msg-copy:hover { color: var(--accent); border-color: var(--accent); }
 
 /* 工具调用卡片 */
 .tool-card {
