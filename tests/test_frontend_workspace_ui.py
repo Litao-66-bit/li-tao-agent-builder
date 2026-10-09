@@ -141,10 +141,15 @@ class TestTaskListWiring:
         assert 'id="newTaskBtn"' in html
 
     def test_列表项也显示已停下(self) -> None:
-        """卡 5：非收敛停下时列表项不能还写「执行中」—— 与详情页的「已停下」矛盾。"""
+        """卡 5 + 卡 C：非收敛停下时列表项不能还写「执行中 / **验证中**」。
+
+        实测（任务 d2cb511f）循环因 ``stagnant`` 停下时 status 停在 **verifying**，
+        旧口径（``status === 'executing'``）让徽章照写「验证中」，与详情页的「已停下」打架。
+        """
         body = _function_body(_read("frontend/js/app.js"), "renderTaskList")
         assert "summary.stopped_reason" in body
-        assert "LOOP_STOP_LABELS[summary.stopped_reason" in body
+        # 与详情页共用同一个判定，不再各写一份口径
+        assert "isNonConvergentStop(summary.status, summary.stopped_reason)" in body
         assert "'已停下'" in body
         # 默认路径不变：没有停下原因时仍走原有状态文案。
         assert "statusLabel(summary.status)" in body
@@ -648,15 +653,18 @@ class TestStopCard:
         assert "连续两轮没有新进展" in source
         assert "function loopStopReason(task)" in source
 
-    def test_停下卡只在仍挂在执行中时出现(self) -> None:
+    def test_停下卡只在真非收敛停下时出现(self) -> None:
         body = _function_body(_read("frontend/js/app.js"), "renderActionSlot")
-        # 严格门控：failed / delivered / verifying 各有终态文案，不能被「已停下」盖掉
-        # （实测：用户主动「放弃」后顶栏曾被误写成「已停下」）。
-        assert "task.status === 'executing' ? loopStopReason(task) : ''" in body
+        # 判定改看 **stopped_reason**（不再要求 status === 'executing'）：实测（任务 d2cb511f）
+        # 循环因 stagnant 停下时 status 停在 verifying，旧门槛把「已停下」整段绕过 ——
+        # 同屏出现「✓ 确认交付」卡与「⚠ 执行已停下」结论块，0 产物也能被点成「已交付」。
+        # 「已交付 / 已失败不被覆盖」这条不变式改由 isNonConvergentStop 承担（见其专属测试）。
+        assert "nonConvergentStopReason(task)" in body
         assert "slot.appendChild(buildStopCard(task));" in body
-        # 优先级：待放行 > 等扩编决定 > 已暂停 > 已停下。
+        # 优先级：待放行 > 等扩编决定 > 已暂停 > 已停下 > **交付**（停在最后，别越权收尾）。
         assert body.index("buildReminderCard") < body.index("buildStopCard(task)")
         assert body.index("buildInterruptCard") < body.index("buildStopCard(task)")
+        assert body.index("buildStopCard(task)") < body.index("buildDeliverCard(task)")
 
     def test_停下卡给出原因与出口(self) -> None:
         body = _function_body(_read("frontend/js/app.js"), "buildStopCard")
@@ -977,6 +985,36 @@ class TestTaskItemBadgesDoNotSqueeze:
         assert "flex-wrap: wrap" in block
 
 
+class TestNonConvergentStopIsNotDeliverable:
+    """回归（实测用户任务 d2cb511f）：循环因 ``stagnant`` 停下时，后端把 status 留在
+    **verifying**，前端于是把「已停下」整段绕过 —— 同屏出现
+    「⚠ 执行已停下」结论块 + 「✓ 执行已收尾，等待你确认交付」交付卡 + 顶栏「验证中」，
+    而且一个 **0 产物**的任务还能被点成「已交付」。
+
+    不变式：非收敛停下的判定**只看 stopped_reason**，且详情卡片与左栏列表共用同一口径。
+    """
+
+    def test_判定不再以status为前置条件(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "isNonConvergentStop")
+        assert "LOOP_STOP_LABELS" in body
+        # 关键：不能再用 status === 'executing' 当门槛（正是它把 verifying 的停下放过去了）
+        assert "'executing'" not in body
+        # 已交付 / 已失败仍各有终态文案，不被「已停下」覆盖
+        assert "'delivered'" in body
+        assert "'failed'" in body
+
+    def test_卡片与列表共用同一判定(self) -> None:
+        source = _read("frontend/js/app.js")
+        assert "nonConvergentStopReason(task)" in _function_body(source, "renderActionSlot")
+        assert "isNonConvergentStop(summary.status, summary.stopped_reason)" in _function_body(
+            source, "renderTaskList"
+        )
+
+    def test_停下卡分支排在交付卡之前(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "renderActionSlot")
+        assert body.index("currentStopReason") < body.index("buildDeliverCard")
+
+
 class TestConclusionStaysLast:
     """回归（实测用户任务 98bab8c4）：放行后重渲染的产物行落到了结论**下面**，
     看起来像「结论之后又产出了东西」，与「结论=收尾」的语义打架。
@@ -1014,7 +1052,7 @@ class TestConclusionToneMatchesState:
         body = _function_body(source, "conclusionTone")
         # 三类非终态都要认：待放行 / 非收敛停下 / 已中断 / 已失败
         assert "task.pending_approval" in body
-        assert "loopStopReason(task)" in body
+        assert "nonConvergentStopReason(task)" in body
         assert "'interrupted'" in body
         assert "'failed'" in body
 

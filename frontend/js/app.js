@@ -1388,7 +1388,7 @@ function appendArtifactRow(path, title, stepId) {
 /** 结论区的色调：done（真收敛）/ paused（等放行或已中断）/ stopped（非收敛停下）/ failed。 */
 function conclusionTone(task) {
   if (task && task.pending_approval) return 'paused';
-  if (loopStopReason(task)) return 'stopped';
+  if (nonConvergentStopReason(task)) return 'stopped';
   const status = task && task.status;
   if (status === 'interrupted') return 'paused';
   if (status === 'failed') return 'failed';
@@ -1708,6 +1708,27 @@ function loopStopReason(task) {
   return LOOP_STOP_LABELS[reason] || '';
 }
 
+/** 非收敛停下的**统一判定**（详情卡片与左栏列表必须同一口径）。
+ *
+ * ⚠️ 不能只看 ``status``：实测（用户任务 d2cb511f）循环因 ``stagnant`` 停下时，后端把
+ * status 留在 **verifying** —— 于是「已停下」这一层被整段绕过：同屏出现绿底
+ * 「⚠ 执行已停下」结论块 + 「✓ 执行已收尾，等待你确认交付」交付卡 + 顶栏「验证中」，
+ * 而且一个 **0 产物**的任务还能被点成「已交付」。
+ *
+ * 已交付 / 已失败有各自的终态文案，不被「已停下」覆盖。
+ */
+function isNonConvergentStop(status, stoppedReason) {
+  if (!LOOP_STOP_LABELS[stoppedReason || '']) return false;
+  return status !== 'delivered' && status !== 'failed';
+}
+
+/** 取「循环没把需求做完就停了」的人话原因；不是这种停下返回空串。 */
+function nonConvergentStopReason(task) {
+  if (!task) return '';
+  const reason = task.loop_state && task.loop_state.stopped_reason;
+  return isNonConvergentStop(task.status, reason) ? LOOP_STOP_LABELS[reason] : '';
+}
+
 /** 渲染「执行已停下」卡：把后端停下原因翻成人话，并给出唯一可用的操作（放弃）。
  *
  * 这些停下原因（预算耗尽 / 空转 / 决策不可解析）下，任务是**没做完**的；此前前端什么
@@ -1757,9 +1778,8 @@ function renderActionSlot(task) {
   if (!slot) return;
   slot.innerHTML = '';
   currentPendingApproval = task && task.pending_approval ? task.pending_approval : null;
-  // 只有「任务仍挂在 executing、但循环已经不跑了」才算异常停下。已失败 / 已交付 / 验证中
-  // 都有各自的终态文案，不能被这个覆盖（否则用户主动「放弃」后顶栏会显示成「已停下」）。
-  currentStopReason = task && task.status === 'executing' ? loopStopReason(task) : '';
+  // 非收敛停下：循环已经不跑了，但需求没做完 —— 判定只看 stopped_reason（见该助手）。
+  currentStopReason = nonConvergentStopReason(task);
   if (currentPendingApproval) {
     slot.appendChild(buildReminderCard(currentPendingApproval, task.task_id));
   } else if (task && task.pending_proposal) {
@@ -2114,10 +2134,9 @@ function renderTaskList(summaries) {
     title.textContent = summary.title || String(summary.task_id).slice(0, 8);
     const meta = document.createElement('span');
     meta.className = 'task-item-meta';
-    // 非收敛停下：列表项也要显示「已停下」—— 否则左栏写「执行中」、详情页写「已停下」，两处打架。
-    // 判定与详情页同口径（都拿 loop_state.stopped_reason 经 LOOP_STOP_LABELS 翻译）。
-    const stopped = summary.status === 'executing'
-      && Boolean(LOOP_STOP_LABELS[summary.stopped_reason || '']);
+    // 非收敛停下：列表项也要显示「已停下」—— 否则左栏写「执行中/验证中」、详情页写「已停下」，两处打架。
+    // 与详情页共用同一个判定（isNonConvergentStop），别再各写一份口径。
+    const stopped = isNonConvergentStop(summary.status, summary.stopped_reason);
     const status = document.createElement('span');
     status.className = `task-status ${stopped ? 'interrupted' : summary.status}`;
     status.textContent = stopped ? '已停下' : statusLabel(summary.status);
