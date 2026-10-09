@@ -1375,7 +1375,10 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.task-item-meta { display: flex; align-items: center; gap: 6px; }
+/* 徽章整体换行，绝不把自己的文字压成两行 —— 实测：左栏只有 168px、任务条目 93px，
+ * meta 行 75px 装不下「执行中 + 待放行」时，nowrap + 默认可收缩会把「执行中」
+ * 渲染成 宽 36 / 高 32（两行文字），看起来像坏掉了。 */
+.task-item-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .task-status {
   font-size: 10px;
   padding: 1px 6px;
@@ -1397,6 +1400,9 @@ body {
   color: var(--warn);
   font-weight: 700;
 }
+/* 徽章是**原子单元**：不收缩、不内部换行；放不下就整体换到下一行（见 .task-item-meta）。 */
+.task-status,
+.task-flag { flex: 0 0 auto; white-space: nowrap; }
 .task-empty { padding: 4px 2px; font-size: 11px; color: var(--text-muted); }
 
 /* ══════════ 结构化区块槽位（中栏，不参与对话裁剪）══════════ */
@@ -1631,6 +1637,14 @@ body {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+/* 结论区的色调跟着状态走：只有**真收敛**才配成功色（绿）。
+ * 「到点暂停 / 已停下 / 失败」是系统给的非终态文案，渲染成"已完成"会与提醒卡自相矛盾。 */
+.conclusion-block[data-tone="paused"],
+.conclusion-block[data-tone="stopped"] { border-left-color: var(--warn); }
+.conclusion-block[data-tone="failed"] { border-left-color: var(--danger); }
+.conclusion-block[data-tone="paused"] .conclusion-label,
+.conclusion-block[data-tone="stopped"] .conclusion-label { color: var(--warn); }
+.conclusion-block[data-tone="failed"] .conclusion-label { color: var(--danger); }
 
 /* ══════════ Markdown 子集渲染（助手消息 / 结论区）══════════
  * 对齐 DeepSeek 网页版的正文形态：标题层级、列表缩进、围栏代码卡片（含复制）、表格、引用。

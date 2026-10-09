@@ -37,6 +37,19 @@ const LOOP_STOP_LABELS = {
   invalid_decision: '模型没能给出可解析的决策',
 };
 
+/** 结论区的标题：**只有真收敛**才配得上成功色。
+ *
+ * 实测问题（用户任务 98bab8c4）：任务「到点暂停」时后端也会给 conclusion
+ * （narrate 的系统文案「执行暂停：3 步中 1 步等待你放行」），前端却一律用绿底
+ * 「✅ 结论」渲染 —— 把"没做完"显示成"已完成"，与同一屏的提醒卡自相矛盾。
+ */
+const CONCLUSION_LABELS = {
+  done: '✅ 结论',
+  paused: '⏸ 执行暂停',
+  stopped: '⚠ 执行已停下',
+  failed: '✗ 执行结束',
+};
+
 // 工具卡片状态 → 展示文案（键名同时用作 CSS 类名 .tool-status.<key>）。
 const TOOL_STATUS_LABELS = {
   success: '✓ 成功',
@@ -278,6 +291,12 @@ function scrollChatToBottom(force) {
 function mountChatNode(node) {
   const log = document.getElementById('chatLog');
   log.appendChild(node);
+  // 结论块永远压在最后：它是"这次跑完的结果"，不该被后到的产物行 / 消息压到上面去。
+  // 实测（用户任务 98bab8c4）：放行后重渲染的产物行落到了结论**下面**，看起来像
+  // "结论之后又产出了东西"，与"结论是收尾"的语义打架。
+  if (conclusionBlockEl && conclusionBlockEl.isConnected && conclusionBlockEl !== node) {
+    log.appendChild(conclusionBlockEl);
+  }
   // 「思考中」指示条始终压在最后：它标记的是"还在等结果"的位置。
   if (thinkingEl && thinkingEl.isConnected) log.appendChild(thinkingEl);
   refreshChatEmpty();
@@ -1366,6 +1385,16 @@ function appendArtifactRow(path, title, stepId) {
  * 「做了什么、成没成」是默认视图必须一眼可见的东西。
  */
 
+/** 结论区的色调：done（真收敛）/ paused（等放行或已中断）/ stopped（非收敛停下）/ failed。 */
+function conclusionTone(task) {
+  if (task && task.pending_approval) return 'paused';
+  if (loopStopReason(task)) return 'stopped';
+  const status = task && task.status;
+  if (status === 'interrupted') return 'paused';
+  if (status === 'failed') return 'failed';
+  return 'done';
+}
+
 /** 渲染/刷新结论块（只渲染，不写会话记录）。
  *
  * 不写 transcript 是刻意的：结论由后端状态派生（``GET /tasks/{id}`` 也带），
@@ -1380,12 +1409,12 @@ function renderConclusion(task) {
     }
     return;
   }
+  const tone = conclusionTone(task);
   if (!conclusionBlockEl || !conclusionBlockEl.isConnected) {
     conclusionBlockEl = document.createElement('div');
     conclusionBlockEl.className = 'conclusion-block chat-item';
     const label = document.createElement('div');
     label.className = 'conclusion-label';
-    label.textContent = '✅ 结论';
     const body = document.createElement('div');
     body.className = 'conclusion-body';
     // 工具条：复制**原始 Markdown**（渲染后再取 textContent 会丢掉列表/表格的换行结构）
@@ -1395,6 +1424,10 @@ function renderConclusion(task) {
     conclusionBlockEl.appendChild(buildMsgTools({ regen: true }));
     mountChatNode(conclusionBlockEl);
   }
+  // 色调与标题**每轮重算**：同一个块会经历「暂停 → 收尾」，不能只在创建时定一次档。
+  conclusionBlockEl.dataset.tone = tone;
+  const labelEl = conclusionBlockEl.querySelector('.conclusion-label');
+  if (labelEl) labelEl.textContent = CONCLUSION_LABELS[tone] || CONCLUSION_LABELS.done;
   const body = conclusionBlockEl.querySelector('.conclusion-body');
   // 结论是模型写给用户看的成品（实际含 Markdown）→ 按子集渲染，与 DeepSeek 网页版一致的观感。
   body.classList.add('md');

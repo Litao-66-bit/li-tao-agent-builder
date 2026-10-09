@@ -953,6 +953,87 @@ class TestConclusionBlock:
         assert "white-space: pre-wrap" in css[start : start + 300]
 
 
+class TestTaskItemBadgesDoNotSqueeze:
+    """回归（实测用户任务 98bab8c4）：左栏只有 168px、任务条目 93px，而 meta 行 75px
+    装不下「执行中 + 待放行」两个徽章 —— ``nowrap`` + 默认可收缩把徽章文字压成两行
+    （浏览器实测「执行中」渲染成 **宽 36 / 高 32**），看起来像坏掉了。
+
+    不变式：徽章是**原子单元** —— 不收缩、不内部换行；放不下就整体换到下一行。
+    """
+
+    def test_徽章不收缩不内部换行(self) -> None:
+        css = _read("frontend/styles.css")
+        anchor = ".task-status,\n.task-flag {"
+        assert anchor in css
+        block = css[css.index(anchor) : css.index(anchor) + 200]
+        assert "white-space: nowrap" in block
+        assert "flex: 0 0 auto" in block
+        assert "#" not in block
+
+    def test_meta行允许整体换行(self) -> None:
+        css = _read("frontend/styles.css")
+        anchor = ".task-item-meta {"
+        block = css[css.index(anchor) : css.index(anchor) + 220]
+        assert "flex-wrap: wrap" in block
+
+
+class TestConclusionStaysLast:
+    """回归（实测用户任务 98bab8c4）：放行后重渲染的产物行落到了结论**下面**，
+    看起来像「结论之后又产出了东西」，与「结论=收尾」的语义打架。
+
+    不变式：结论块永远压在对话流最后。
+    """
+
+    def test_挂载新节点时把结论块移到最后(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "mountChatNode")
+        assert "conclusionBlockEl.isConnected" in body
+        assert "log.appendChild(conclusionBlockEl)" in body
+
+    def test_结论块自己不被重复搬动(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "mountChatNode")
+        assert "conclusionBlockEl !== node" in body
+
+    def test_思考指示条仍排在结论之后(self) -> None:
+        """结论搬到末尾后，指示条还要在它**之后** —— 否则「还在跑」会显示在结论上方。"""
+        body = _function_body(_read("frontend/js/app.js"), "mountChatNode")
+        assert body.index("log.appendChild(conclusionBlockEl)") < body.index(
+            "log.appendChild(thinkingEl)"
+        )
+
+
+class TestConclusionToneMatchesState:
+    """回归（实测用户任务 98bab8c4）：「到点暂停」时后端**也会**下发 conclusion
+    （narrate 的系统文案「执行暂停：3 步中 1 步等待你放行」），前端却一律用绿底
+    「✅ 结论」渲染 —— 把"没做完"显示成"已完成"，与同一屏的提醒卡自相矛盾。
+    """
+
+    def test_非终态不配成功色标签(self) -> None:
+        source = _read("frontend/js/app.js")
+        assert "CONCLUSION_LABELS" in source
+        assert "'⏸ 执行暂停'" in source
+        body = _function_body(source, "conclusionTone")
+        # 三类非终态都要认：待放行 / 非收敛停下 / 已中断 / 已失败
+        assert "task.pending_approval" in body
+        assert "loopStopReason(task)" in body
+        assert "'interrupted'" in body
+        assert "'failed'" in body
+
+    def test_色调与标签每轮重算(self) -> None:
+        """同一个块会经历「暂停 → 收尾」：不能只在创建时定一次档。"""
+        body = _function_body(_read("frontend/js/app.js"), "renderConclusion")
+        assert "conclusionTone(task)" in body
+        assert "dataset.tone = tone" in body
+        assert "CONCLUSION_LABELS[tone]" in body
+
+    def test_色调样式只用token(self) -> None:
+        css = _read("frontend/styles.css")
+        anchor = '.conclusion-block[data-tone="paused"]'
+        assert anchor in css
+        block = css[css.index(anchor) : css.index(anchor) + 400]
+        assert "var(--warn)" in block
+        assert "#" not in block
+
+
 class TestMarkdownRendering:
     """助手输出按 Markdown 子集渲染（对齐 DeepSeek 网页版的正文形态）。
 
