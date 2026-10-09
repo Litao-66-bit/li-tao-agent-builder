@@ -15,14 +15,18 @@ class TestNotice:
         content = (ROOT / "NOTICE").read_text(encoding="utf-8")
         assert "Mozilla Public License 2.0" in content or "MPL-2.0" in content
         # 许可证声明必须覆盖核心依赖
-        for dep in ("langgraph", "langchain-openai", "openai", "pydantic", "python-dotenv", "ruff"):
+        for dep in ("langchain-openai", "openai", "pydantic", "python-dotenv", "ruff"):
             assert dep in content, f"NOTICE 缺少依赖 {dep}"
         # 许可证名称必须出现
         for lic in ("MIT", "Apache-2.0", "BSD-3-Clause"):
             assert lic in content, f"NOTICE 缺少许可证 {lic}"
-        # 与 lock 的版本一致性：NOTICE 引用的版本应来自 requirements.lock
+        # 与 lock 的一致性：pyproject 的直接依赖都应钉在 requirements.lock 里；已移除的编排框架
+        # （langgraph）不得再被锁定。实测：只改 pyproject 而忘改 lock 时，这条断言会把不一致挡在 CI 前。
         lock = (ROOT / "requirements.lock").read_text(encoding="utf-8")
-        assert "langgraph==1.2.12" in lock
+        for dep in ("langchain-openai", "pydantic", "fastapi", "uvicorn", "python-dotenv"):
+            assert f"{dep}==" in lock, f"requirements.lock 缺少直接依赖 {dep}"
+        # 只允许注释里出现历史提及（如 `# via langgraph`），不允许再**锁定** langgraph 包。
+        assert "\nlanggraph" not in "\n" + lock, "requirements.lock 仍在锁定 langgraph"
 
 
 class TestSecurity:

@@ -8,14 +8,14 @@ Copyright (c) 2026 Litao-66-bit
 完整的许可证文本见仓库根目录 `LICENSE`。
 
 本软件使用若干第三方开源库。以下声明列出**直接依赖**的许可证与用途；
-完整且精确的依赖版本清单见 `requirements.lock`（由 `uv pip compile pyproject.toml --extra dev` 生成）。
+完整且精确的依赖版本清单见 `requirements.lock`（由 `uv pip compile pyproject.toml --extra dev` 生成；
+2026-10 起编排改为本仓库自研，`langgraph` 及其独占依赖已从声明、lock 与本次声明中一并移除）。
 
 第三方依赖声明
 ---------------
 
 | 依赖 | lock 版本 | 许可证 | 用途 |
 | --- | --- | --- | --- |
-| langgraph / langgraph-checkpoint / langgraph-checkpoint-sqlite / langgraph-prebuilt / langgraph-sdk | 1.2.12 / 4.2.0 / 3.1.1 / 1.1.0 / 0.4.5 | MIT | Agent 编排图、状态检查点 |
 | langchain-openai / langchain-core / langchain-protocol | 1.6.6 / 1.6.5 / 0.0.19 | MIT | LLM 接入（DeepSeek 端点） |
 | openai | 3.19.2 | Apache-2.0 | OpenAI 兼容 API 客户端 |
 | pydantic / pydantic-core / annotated-types | 2.13.5 / 2.46.5 / 0.8.0 | MIT | Schema 定义与校验 |
