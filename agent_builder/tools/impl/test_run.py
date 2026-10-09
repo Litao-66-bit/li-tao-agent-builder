@@ -16,8 +16,13 @@ import urllib.request
 from pathlib import Path
 
 import agent_builder
-from agent_builder.contracts.errors import tool_error, validation_error
-from agent_builder.tools.gatekeeper import workspace_temp_dir, workspace_temp_env
+from agent_builder.contracts.errors import permission_error, tool_error, validation_error
+from agent_builder.tools.gatekeeper import (
+    current_workspace_dir,
+    resolve_in_workspace,
+    workspace_temp_dir,
+    workspace_temp_env,
+)
 from agent_builder.tools.registry import current_correlation_id, registry
 from agent_builder.tools.spec import ToolSpec
 
@@ -135,10 +140,30 @@ def _run_pytest(path: str, timeout: float, cid: str) -> str:
     裸命令必然 ``WinError 2``（"未安装或不在 PATH" 其实是找不到那个可执行文件）。
     跑测试的解释器就用**正在跑本应用的这一个**（pytest 是它的依赖），
     既不用用户改 PATH，也不会挑到另一个 Python 环境。
+
+    target **必须先按当前工作区解析成绝对路径**，并把子进程 ``cwd`` 设为工作区 ——
+    否则相对 target 会由子进程按**继承来的进程 cwd**（＝本应用自己的仓库根）解析。
+    实测（用户任务 ``98bab8c4``）：agent 把交付物写进工作区 ``outputs/``，验证却跑到了
+    仓库根下**同名的旧文件**，报出「9 passed in 0.13s」，而工作区里真正要交付的那份
+    测试是 ``4 failed / 1 passed`` —— 既是**假绿**（循环据此以 final 收尾、把不工作的
+    东西当成功交付），又让门卫**校验的对象（工作区内）与真正执行的对象（工作区外）不一致**。
     """
+    target = resolve_in_workspace(path)
+    workspace = (current_workspace_dir.get() or Path.cwd()).resolve()
+    # 工具层**也**自校验一次：门卫会拦，但"直接调实现"（内部调用 / 测试）绕过门卫 ——
+    # 「校验对象」与「执行对象」必须是同一个，不能只靠上游把关。
+    try:
+        target.relative_to(workspace)
+    except ValueError:
+        raise permission_error(
+            f"test_run: target 超出工作区: {target}（工作区 {workspace}）",
+            source="tool.test_run",
+            correlation_id=cid,
+        ) from None
     try:
         proc = subprocess.run(
-            _pytest_argv(path),
+            _pytest_argv(str(target)),
+            cwd=str(workspace),
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -165,7 +190,10 @@ def _run_pytest(path: str, timeout: float, cid: str) -> str:
         output += f"\n[stderr]\n{proc.stderr}"
     if len(output) > MAX_OUTPUT_CHARS:
         output = output[:MAX_OUTPUT_CHARS] + f"\n…[已截断，原文 {len(output)} 字符]"
-    return output
+    # 前置一行「实际执行了什么」：报告链上的每一环（模型 / 审计 / 人）都要能核对
+    # **跑的到底是哪个文件** —— 实测那次假绿，正是因为报告里没有任何一处写明。
+    # 放最前且不参与截断（保证永远可见）；计数解析是从末尾倒扫，不会被它干扰。
+    return f"[test_run] 工作区={workspace} 实际执行={target}\n{output}"
 
 
 spec = ToolSpec(

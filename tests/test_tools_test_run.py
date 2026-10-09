@@ -9,6 +9,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import urllib.error
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -239,8 +240,11 @@ class TestTestRunCost:
             return_value=_FakeProc(stdout=big),
         ):
             call = registry.execute(gatekeeper, _make_call("operator", str(test_file)))
-        assert len(call.result) < MAX_OUTPUT_CHARS + 100
-        assert "已截断" in call.result
+        # 首行是「实际执行了什么」的审计信息（不参与截断）→ 只对正文量长度，
+        # 否则这里量到的是 正文 + 审计行，上界会随工作区路径长短漂移。
+        body = call.result.split("\n", 1)[1]
+        assert len(body) < MAX_OUTPUT_CHARS + 100
+        assert "已截断" in body
 
     def test_doc_output_truncated(self, gatekeeper):
         big = b"x" * (MAX_OUTPUT_CHARS + 500)
@@ -353,6 +357,140 @@ class TestWorkspaceTempEnv:
         assert spec.timeout_s == 120.0
         assert spec.allowed_roles == ["operator"]
         assert "target" in spec.parameters["required"]
+
+
+class TestTarget按工作区解析:
+    """回归（实测用户任务 ``98bab8c4``，2026-10-09）：
+
+    agent 把交付物写进工作区 ``outputs/``，第 5 步 ``test_run`` 的 target 是相对路径
+    ``outputs/test_paper_agent.py``。子进程**没有传 cwd**，于是相对路径被按继承来的
+    进程 cwd（＝本应用仓库根）解析 → 跑到了仓库根下**同名的旧文件**上，报出
+    「9 passed in 0.13s」，而工作区里那份真正要交付的测试其实是 ``4 failed / 1 passed``。
+
+    后果有两层：① 假绿（循环据此以 final 收尾，把不工作的东西当成功交付）；
+    ② 门卫校验的对象（工作区内相对路径）与真正执行的对象（工作区外文件）不一致。
+
+    这一组钉住修法：**target 按工作区解析成绝对路径 + 子进程 cwd 设为工作区**。
+    """
+
+    def test_相对target解析为工作区内绝对路径且cwd为工作区(self, monkeypatch, tmp_path):
+        import agent_builder.tools.impl.test_run as tr
+        from agent_builder.tools.gatekeeper import current_workspace_dir
+
+        captured: dict = {}
+
+        class _Proc:
+            returncode = 0
+            stdout = "1 passed"
+            stderr = ""
+
+        def _fake_run(*args, **kwargs):
+            captured["argv"] = list(args[0])
+            captured.update(kwargs)
+            return _Proc()
+
+        monkeypatch.setattr(tr.subprocess, "run", _fake_run)
+        token = current_workspace_dir.set(tmp_path)
+        try:
+            tr._run_pytest("outputs/test_x.py", 30.0, "c-test")
+        finally:
+            current_workspace_dir.reset(token)
+
+        target = Path(captured["argv"][3])
+        assert target.is_absolute()
+        assert target == tmp_path / "outputs" / "test_x.py"
+        assert target != Path("outputs/test_x.py")  # 绝不能把相对路径原样交给子进程
+        assert Path(captured["cwd"]) == tmp_path  # cwd 必须是工作区，不是进程 cwd
+
+    def test_工作区内失败的用例必须真报失败(self, tmp_path):
+        """真跑一次 pytest（不 mock）：工作区里放一个必失败用例 → 输出必须是 failed。
+
+        这是**行为侧**证据：只钉住「传了 cwd」证明不了「跑的确实是工作区那份文件」。
+        修好之前，这里会去进程 cwd 下的 ``outputs/`` 找 ``test_x.py``（找不到 → pytest
+        报 file or directory not found），断言随即失败 —— 正是实测踩到的那个假绿。
+        """
+        import agent_builder.tools.impl.test_run as tr
+        from agent_builder.tools.gatekeeper import current_workspace_dir
+
+        outputs = tmp_path / "outputs"
+        outputs.mkdir()
+        (outputs / "test_x.py").write_text(
+            "def test_ok():\n    assert True\n\n\ndef test_bad():\n    assert False\n",
+            encoding="utf-8",
+        )
+        token = current_workspace_dir.set(tmp_path)
+        try:
+            out = tr._run_pytest("outputs/test_x.py", 60.0, "c-test")
+        finally:
+            current_workspace_dir.reset(token)
+
+        assert "1 failed" in out
+        assert "1 passed" in out
+
+
+class Test执行对象可审计与越界拒绝:
+    """卡2：报告的每一环都要能核对「到底跑了哪个文件」；越界 target 工具层自己就拒。
+
+    动机同卡1：那次假绿之所以能一路走到底，是因为**报告里没有任何一处写明执行对象**，
+    于是"验证了别的文件"这件事在模型侧、审计侧、人侧都不可见。
+    """
+
+    def test_输出写明工作区与实际执行路径(self, monkeypatch, tmp_path):
+        import agent_builder.tools.impl.test_run as tr
+        from agent_builder.tools.gatekeeper import current_workspace_dir
+
+        class _Proc:
+            returncode = 0
+            stdout = "1 passed in 0.10s"
+            stderr = ""
+
+        monkeypatch.setattr(tr.subprocess, "run", lambda *a, **k: _Proc())
+        token = current_workspace_dir.set(tmp_path)
+        try:
+            out = tr._run_pytest("outputs/test_x.py", 30.0, "c-test")
+        finally:
+            current_workspace_dir.reset(token)
+
+        # 审计行必须在最前（否则可能被输出截断吞掉）
+        assert out.splitlines()[0].startswith("[test_run]")
+        assert f"工作区={tmp_path}" in out
+        assert f"实际执行={tmp_path / 'outputs' / 'test_x.py'}" in out
+
+    def test_审计行不干扰计数解析(self):
+        """审计行拼在 pytest 输出之前，绝不能让「测试通过 N 项」的口径失真。"""
+        from agent_builder.roles.test_runner import _parse_pytest_counts
+
+        audit = r"[test_run] 工作区=C:\ws 实际执行=C:\ws\outputs\test_x.py"
+        assert _parse_pytest_counts(f"{audit}\n1 failed, 1 passed in 0.13s\n") == (1, 1, 0)
+        assert _parse_pytest_counts(f"{audit}\n9 passed in 0.13s\n") == (9, 0, 0)
+
+    def test_越界target不执行(self, monkeypatch, tmp_path):
+        """门卫会拦，但"直接调实现"绕过了门卫 —— 工具层必须自己拒绝，且绝不执行。"""
+        import agent_builder.tools.impl.test_run as tr
+        from agent_builder.contracts.errors import AgentError
+        from agent_builder.tools.gatekeeper import current_workspace_dir
+
+        called: list = []
+
+        class _Proc:
+            returncode = 0
+            stdout = "1 passed"
+            stderr = ""
+
+        def _fake_run(*args, **kwargs):
+            called.append(args)
+            return _Proc()
+
+        monkeypatch.setattr(tr.subprocess, "run", _fake_run)
+        outside = tmp_path.parent / "outside_test_x.py"
+        token = current_workspace_dir.set(tmp_path)
+        try:
+            with pytest.raises(AgentError):
+                tr._run_pytest(str(outside), 30.0, "c-test")
+        finally:
+            current_workspace_dir.reset(token)
+
+        assert called == []
 
 
 # ── 常量 ────────────────────────────────────────────────────────
