@@ -7,7 +7,7 @@ import pytest
 from agent_builder.contracts.errors import AgentError
 from agent_builder.contracts.schemas import RolePerm, ToolCall
 from agent_builder.tools.gatekeeper import ToolGatekeeper
-from agent_builder.tools.impl.file_list import MAX_ENTRIES
+from agent_builder.tools.impl.file_list import EMPTY_DIR_MARKER, MAX_ENTRIES
 from agent_builder.tools.registry import registry
 
 
@@ -54,8 +54,17 @@ class TestFileListFunctional:
         assert call.status == "executed"
 
     def test_list_empty_dir(self, gatekeeper, workspace):
+        """空目录必须给**显式标记**，绝不能返回空串。
+
+        回归（实测用户任务 d2cb511f，空工作区）：空串让模型无法区分「这个目录是空的」与
+        「工具没返回东西」，于是连着 3 轮重复同一个 ``file_list(".")``（思考原话
+        「工作区情况未知」），第 3 步就被空转闸门掐死 —— 0 产物。此前这里断言的**正是那个
+        空串**（缺陷被测试钉住了），所以这条必须一起改。
+        """
         call = registry.execute(gatekeeper, _make_call("operator", workspace))
-        assert call.result == ""
+        assert call.result == EMPTY_DIR_MARKER
+        assert call.result != ""  # 核心不变式：观察结果不能是空的
+        assert "空目录" in call.result
         assert call.status == "executed"
 
     def test_list_only_files(self, gatekeeper, workspace):

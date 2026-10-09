@@ -14,6 +14,15 @@ from agent_builder.tools.spec import ToolSpec
 # 单次列出的最大条目数：超过则截断，防止上下文/token 膨胀。
 MAX_ENTRIES = 500
 
+# 空目录的显式标记：**绝不能返回空串**。
+#
+# 实测（用户任务 d2cb511f，空工作区）：此前空目录返回空字符串，模型收到一个"什么都没有"的
+# 观察结果，无法区分「这个目录是空的」与「工具没返回东西」，于是连着 3 轮重复同一个
+# ``file_list(".")``（思考原话：「工作区情况未知」「尚未看到内容」），第 3 步就被空转闸门
+# 掐死 —— 一次都没开始写代码，0 产物。给显式标记后，模型才能据此判断
+# 「没有可复用的实现 → 从零新建」。
+EMPTY_DIR_MARKER = "（空目录：该目录下没有任何文件或子目录）"
+
 
 def list_dir(path: str) -> str:
     """列出白名单目录内指定路径下的文件和子目录。
@@ -24,7 +33,8 @@ def list_dir(path: str) -> str:
     Returns:
         每行一个条目，格式 ``[DIR]  <相对路径>/`` 或 ``[FILE] <相对路径> (N bytes)``；
         相对路径**带上被列目录的前缀**（列工作区根时无前缀，如 ``[FILE] agents/a.py``）。
-        目录在前、文件在后，各自按名称排序。空目录返回空字符串。
+        目录在前、文件在后，各自按名称排序。空目录返回 ``EMPTY_DIR_MARKER``
+        （**显式标记，不是空串** —— 空串会让模型以为"什么都没拿到"，见该常量的说明）。
 
     Raises:
         AgentError(E_VALIDATION): 路径为空 / 不存在 / 不是目录。
@@ -99,6 +109,8 @@ def list_dir(path: str) -> str:
         shown = len(dirs) + len(files)
         lines.append(f"…[已截断，共 {total} 条目，仅显示前 {shown} 条]")
 
+    if not lines:
+        return EMPTY_DIR_MARKER
     return "\n".join(lines)
 
 
@@ -125,4 +137,4 @@ spec = ToolSpec(
 registry.register(spec, list_dir)
 
 
-__all__ = ["MAX_ENTRIES", "list_dir", "spec"]
+__all__ = ["EMPTY_DIR_MARKER", "MAX_ENTRIES", "list_dir", "spec"]

@@ -201,16 +201,51 @@ READ_ONLY_ACTIONS: frozenset[str] = frozenset(
 )
 # 连续只读多少轮、且存在未解决的失败时，插入系统纠正。
 STALL_READ_ROUNDS = 3
+# 末尾连续重复**同一个只读调用**（动作 + 参数都一样）多少轮就插入纠正 —— **不要求有失败**。
+#
+# 实测（用户任务 d2cb511f，空工作区）：模型连续 3 轮调用同一个 ``file_list(".")``，思考里
+# 始终写着"工作区情况未知" —— 它并不缺信息，缺的是「必须动手」这条硬约束。而空转闸门
+# （``MAX_STAGNANT_ROUNDS=2``）在第 3 步就把它掐死了：主循环是**先判停、再算纠正**
+# （``budget.stop_reason()`` 早于 ``context.stall_note = _stall_note(rounds)``），
+# 而纠正此前还硬性要求"存在未解决的失败" —— 于是**纯只读的重复空转一次纠正机会都没有**。
+#
+# 只看「**同一个**调用」：读不同的文件属于正常查证，不能打扰
+# （对照见 tests/test_agent_loop.py::TestStallNudge::test_没有失败时不纠正）。
+REPEAT_READ_ROUNDS = 2
+
+
+def _trailing_repeated_read_only(rounds: list[LoopRound]) -> int:
+    """末尾连续「同一个只读调用（动作 + 参数都相同）」的轮数。"""
+    count = 0
+    key: str | None = None
+    for item in reversed(rounds):
+        if item.status != "done" or item.decision.action not in READ_ONLY_ACTIONS:
+            break
+        current = _attempt_key(item.decision)
+        if key is None:
+            key = current
+        elif current != key:
+            break
+        count += 1
+    return count
 
 
 def _stall_note(rounds: list[LoopRound]) -> str:
-    """连续只读 + 存在未解决失败 → 返回**硬性**纠正文案；否则空串。
+    """连续只读 / 重复同一个只读调用 → 返回**硬性**纠正文案；否则空串。
 
-    实测（用户任务 ``a20291c1``）：模型第 2 步拿到测试失败，接着**连读 6 轮**，思考里已经把
-    根因说得完全正确（"需改实现而非改测试：测试传 topic/synonyms，实现是 keywords"），
-    却始终不动手；第 9 步又跑同一个 ``test_run`` 拿到一模一样的失败 → 重复失败闸门掐停，
-    9 步 0 产物。它不缺工具（``file_edit`` 就在能力目录里），缺的是「必须动手」这条硬约束 ——
-    所以由系统直接纠正，而不是指望模型自觉。
+    两个互补的触发条件：
+
+    1. **连续只读 + 存在未解决的失败**（``STALL_READ_ROUNDS``）——
+       实测（用户任务 ``a20291c1``）：模型第 2 步拿到测试失败，接着**连读 6 轮**，思考里已经把
+       根因说得完全正确（"需改实现而非改测试：测试传 topic/synonyms，实现是 keywords"），
+       却始终不动手；第 9 步又跑同一个 ``test_run`` 拿到一模一样的失败 → 重复失败闸门掐停，
+       9 步 0 产物。它不缺工具（``file_edit`` 就在能力目录里），缺的是「必须动手」这条硬约束。
+    2. **末尾连续重复同一个只读调用**（``REPEAT_READ_ROUNDS``，不要求有失败）——
+       实测（用户任务 ``d2cb511f``）：空工作区里连续 3 轮 ``file_list(".")``，思考始终是
+       "工作区情况未知"，第 3 步被空转闸门掐死、0 产物。重复取回**同一份**东西不会带来新信息，
+       所以同样必须要求它动手，而不是等到判停为止。
+
+    两种情况都由系统直接纠正，不指望模型自觉。
     """
     trailing = 0
     for item in reversed(rounds):
@@ -218,19 +253,31 @@ def _stall_note(rounds: list[LoopRound]) -> str:
             trailing += 1
         else:
             break
-    if trailing < STALL_READ_ROUNDS:
-        return ""
     failed = next((item for item in reversed(rounds) if item.status == "failed"), None)
-    if failed is None:
-        return ""
-    reason = " ".join(str(failed.error or failed.summary or "").split())[:160]
-    return (
-        f"你已连续 {trailing} 轮只做只读动作（读文件 / 列目录 / 搜索），"
-        f"而验证仍然是**失败**的：{reason}。"
-        f"下一步**必须**给出改动 —— 优先 `file_edit`（局部改，不必整份重写），"
-        f"或 `file_write`（整份重写）；确实推不动就用 kind=final 说明原因。"
-        f"**不要**再用 test_run 重复同一次验证，也不要再读同一个文件。"
-    )
+
+    if failed is not None and trailing >= STALL_READ_ROUNDS:
+        reason = " ".join(str(failed.error or failed.summary or "").split())[:160]
+        return (
+            f"你已连续 {trailing} 轮只做只读动作（读文件 / 列目录 / 搜索），"
+            f"而验证仍然是**失败**的：{reason}。"
+            f"下一步**必须**给出改动 —— 优先 `file_edit`（局部改，不必整份重写），"
+            f"或 `file_write`（整份重写）；确实推不动就用 kind=final 说明原因。"
+            f"**不要**再用 test_run 重复同一次验证，也不要再读同一个文件。"
+        )
+
+    repeated = _trailing_repeated_read_only(rounds)
+    if repeated >= REPEAT_READ_ROUNDS:
+        last = next((item for item in reversed(rounds) if item.status == "done"), None)
+        what = "同一个只读动作"
+        if last is not None:
+            _, what = describe_step(last.decision.action, last.decision.inputs)
+        return (
+            f"你已连续 {repeated} 轮调用**同一个**只读动作（{what}），每次都拿回同一份信息 —— "
+            f"再调一次不会带来任何新信息。下一步**必须**改做别的："
+            f"用 `file_write` 新建交付物（新产物放 `outputs/`），或 `file_edit` 修改已有文件；"
+            f"确实推不动就用 kind=final 说明原因。**不要**再重复同一个只读调用。"
+        )
+    return ""
 
 
 def to_step(decision: Decision, *, round_index: int) -> Step:

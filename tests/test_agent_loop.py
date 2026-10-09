@@ -588,6 +588,75 @@ class TestStallNudge:
         assert all(note == "" for note in seen)
 
 
+class TestStallNudgeOnRepeatedRead:
+    """回归（实测用户任务 d2cb511f，空工作区）：连续重复**同一个只读调用**、且**没有任何失败**
+    时，此前一次纠正都拿不到 —— 主循环**先判停、再算纠正**，而纠正还硬性要求"存在未解决的
+    失败"，于是空转闸门在第 3 步直接把它掐死：3 步、0 产物。
+
+    与 ``TestStallNudge::test_没有失败时不纠正`` 的分界：读**不同**目标是正常查证（不打扰）；
+    重复读**同一个**目标、拿回同一份东西，才是空转。
+    """
+
+    def test_重复同一个只读调用会触发纠正(self) -> None:
+        seen: list[str] = []
+
+        class _RecordingDecider:
+            name = "recording"
+
+            def decide(self, context):
+                seen.append(context.stall_note)
+                if len(seen) <= 3:
+                    # 三轮都读**同一个**文件（动作 + 参数都一样）
+                    return Decision(
+                        kind=KIND_AGENT,
+                        role="code_worker",
+                        action="file_read",
+                        inputs={"path": "src.py"},
+                    )
+                return _finish()
+
+        def _execute(step):
+            return StepOutcome(status="done", summary="读取文件完成", observation="x", tokens=0)
+
+        outcome = run_agent_loop(
+            context=_context(), decider=_RecordingDecider(), execute=_execute
+        )
+
+        assert seen[0] == ""
+        assert seen[1] == ""  # 同一份信息才读过一次，还不算重复空转
+        # 关键：纠正必须在**判停之前**注入（此前判停在前，纠正永远没机会）
+        assert any(note for note in seen)
+        assert "同一个只读调用" in seen[2]
+        assert "file_write" in seen[2]
+        # 脚本决策器不会听纠正，于是仍然被判停 —— 但那是"给过机会之后"才停，浪费有界（1 步）
+        assert outcome.stopped_reason == STOP_STAGNANT
+
+    def test_换目标的只读仍然不纠正(self) -> None:
+        """对照：读不同文件属于正常查证，不能被当成空转（钉住原口径不退化）。"""
+        seen: list[str] = []
+
+        class _RecordingDecider:
+            name = "recording"
+
+            def decide(self, context):
+                seen.append(context.stall_note)
+                if len(seen) <= 4:
+                    return Decision(
+                        kind=KIND_AGENT,
+                        role="code_worker",
+                        action="file_read",
+                        inputs={"path": f"src{len(seen)}.py"},
+                    )
+                return _finish()
+
+        def _execute(step):
+            return StepOutcome(status="done", summary="读取文件完成", observation="x", tokens=0)
+
+        run_agent_loop(context=_context(), decider=_RecordingDecider(), execute=_execute)
+
+        assert all(note == "" for note in seen)
+
+
 class TestStagnationCountsNewSymptom:
     """实测（用户任务 02bd9686）：R6 成功改掉一个 TypeError → R9 跑出**新的** NameError
     （它自己引入的）→ R10 想补 import 但 old_string 不匹配。若把这两轮都算"无产出"，
