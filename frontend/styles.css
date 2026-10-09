@@ -1543,6 +1543,93 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* ══════════ Markdown 子集渲染（助手消息 / 结论区）══════════
+ * 对齐 DeepSeek 网页版的正文形态：标题层级、列表缩进、围栏代码卡片（含复制）、表格、引用。
+ * 只允许用 token（本项目有"不写死颜色"的测试）。 */
+.md {
+  /* Markdown 正文**不能**沿用 pre-wrap：标签之间的换行会被渲染成多余空行。 */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.md p { margin: 0 0 8px; line-height: 1.65; }
+.md p:last-child { margin-bottom: 0; }
+.md h1, .md h2, .md h3, .md h4 {
+  margin: 12px 0 6px;
+  line-height: 1.35;
+  font-weight: 800;
+  color: var(--text-strong);
+}
+.md h1 { font-size: 17px; }
+.md h2 { font-size: 16px; }
+.md h3 { font-size: 14.5px; }
+.md h4 { font-size: 13.5px; }
+.md ul, .md ol { margin: 4px 0 8px; padding-left: 20px; }
+.md li { margin: 2px 0; line-height: 1.6; }
+.md code {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 12px;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.md a { color: var(--accent); text-decoration: none; }
+.md a:hover { text-decoration: underline; }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+.md blockquote {
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-muted);
+}
+.md-table-wrap { overflow-x: auto; margin: 6px 0; }
+.md table { border-collapse: collapse; font-size: 12px; }
+.md th, .md td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+  line-height: 1.5;
+}
+.md th { background: var(--bg-surface-2); font-weight: 700; }
+.md-code {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-surface-2);
+}
+.md-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 10px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+.md-code-lang {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.md-copy {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.md-copy:hover { color: var(--accent); border-color: var(--accent); }
+.md-code pre { margin: 0; padding: 8px 10px; overflow-x: auto; }
+.md-code pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 /* ══════════ 副结构提议卡（等扩编决定）══════════ */
 /* 用 --accent 而非 --warn：这是"要不要扩编"的决策，不是高风险告警；
  * 与提醒卡（橙）、中断卡（灰）三者在视觉上可区分。 */

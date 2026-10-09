@@ -922,6 +922,166 @@ function updateStatusKey(status) {
   }
 }
 
+/* ──────────────── Markdown 子集渲染 ──────────────── */
+
+/** 行内格式：`码` / **粗** / *斜* / ~~删~~ / [文字](https 链接)。**入参必须是已转义的 HTML**。 */
+function mdInline(escaped) {
+  return escaped
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
+    .replace(
+      /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
+    );
+}
+
+/** 把模型写的 Markdown **子集**渲染成 HTML（助手消息 / 结论区）。
+ *
+ * 为什么自己写：本项目前端**零构建、零第三方库**，而模型结论实际用到的语法就这几样
+ * （标题 / 列表 / 加粗 / 行内码 / 围栏代码块 / 表格 / 引用 / 链接），一个几百行的子集足够，
+ * 也避免引入供应链依赖。
+ *
+ * 安全：**先 escapeHtml 全文**，之后只拼接白名单标签；代码块内容保持转义态原样输出。
+ * 已知取舍：列表不做多层缩进（都按单层渲染），够用且不引入嵌套解析的复杂度。
+ */
+function renderMarkdown(text) {
+  const lines = escapeHtml(String(text == null ? '' : text)).split('\n');
+  const out = [];
+  let listType = '';
+  const closeList = () => {
+    if (listType) {
+      out.push(`</${listType}>`);
+      listType = '';
+    }
+  };
+  const openList = (type) => {
+    if (listType !== type) {
+      closeList();
+      out.push(`<${type}>`);
+      listType = type;
+    }
+  };
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // 围栏代码块 → 带语言标签与「复制」按钮的卡片
+    const fence = line.match(/^\s*```\s*([A-Za-z0-9_+-]*)\s*$/);
+    if (fence) {
+      closeList();
+      const code = [];
+      i += 1;
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
+        code.push(lines[i]);
+        i += 1;
+      }
+      i += 1; // 跳过收尾围栏
+      out.push(
+        '<div class="md-code">'
+          + `<div class="md-code-head"><span class="md-code-lang">${fence[1] || 'text'}</span>`
+          + '<button type="button" class="md-copy">复制</button></div>'
+          + `<pre><code>${code.join('\n')}</code></pre></div>`,
+      );
+      continue;
+    }
+
+    // 表格：表头行 + 分隔行（|---|---|）
+    if (
+      line.includes('|')
+      && i + 1 < lines.length
+      && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1])
+    ) {
+      closeList();
+      const cells = (row) => row
+        .replace(/^\s*\|/, '')
+        .replace(/\|\s*$/, '')
+        .split('|')
+        .map((cell) => mdInline(cell.trim()));
+      const head = cells(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes('|')) {
+        rows.push(cells(lines[i]));
+        i += 1;
+      }
+      out.push(
+        '<div class="md-table-wrap"><table><thead><tr>'
+          + head.map((cell) => `<th>${cell}</th>`).join('')
+          + '</tr></thead><tbody>'
+          + rows
+            .map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`)
+            .join('')
+          + '</tbody></table></div>',
+      );
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
+    if (heading) {
+      closeList();
+      const level = heading[1].length;
+      out.push(`<h${level}>${mdInline(heading[2].trim())}</h${level}>`);
+      i += 1;
+      continue;
+    }
+
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) {
+      closeList();
+      out.push('<hr>');
+      i += 1;
+      continue;
+    }
+
+    // 引用：**注意**文本已被 escapeHtml，行首的 `>` 会变成 `&gt;`，两种写法都要认。
+    const quoteMark = /^\s*(?:&gt;|>)\s?/;
+    if (quoteMark.test(line)) {
+      closeList();
+      const quote = [];
+      while (i < lines.length && quoteMark.test(lines[i])) {
+        quote.push(lines[i].replace(quoteMark, ''));
+        i += 1;
+      }
+      out.push(`<blockquote>${mdInline(quote.join('\n')).replace(/\n/g, '<br>')}</blockquote>`);
+      continue;
+    }
+
+    const bullet = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+    if (bullet) {
+      openList(/\d/.test(bullet[2][0]) ? 'ol' : 'ul');
+      out.push(`<li>${mdInline(bullet[3])}</li>`);
+      i += 1;
+      continue;
+    }
+
+    if (!line.trim()) {
+      closeList();
+      i += 1;
+      continue;
+    }
+
+    // 段落：连续普通行合并，行内换行保留为 <br>（聊天里主动换行通常是故意的）
+    closeList();
+    const para = [];
+    while (
+      i < lines.length
+      && lines[i].trim()
+      && !/^\s*```/.test(lines[i])
+      && !/^#{1,4}\s+/.test(lines[i])
+      && !/^(\s*)([-*+]|\d+\.)\s+/.test(lines[i])
+      && !/^\s*(?:&gt;|>)/.test(lines[i])
+      && !/^\s*(-{3,}|\*{3,})\s*$/.test(lines[i])
+    ) {
+      para.push(lines[i]);
+      i += 1;
+    }
+    out.push(`<p>${mdInline(para.join('\n')).replace(/\n/g, '<br>')}</p>`);
+  }
+  closeList();
+  return out.join('');
+}
+
 /* ──────────────── 对话渲染 ──────────────── */
 
 /** 渲染一条消息气泡（只渲染，不写会话记录）。 */
@@ -930,7 +1090,14 @@ function renderMessage(role, text) {
   wrap.className = `chat-item ${role === 'user' ? 'msg-user' : 'msg-agent'}`;
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  bubble.textContent = text;
+  if (role === 'user') {
+    // 用户自己写的内容按纯文本显示（不做格式化，避免误把 * / # 当语法）。
+    bubble.textContent = text;
+  } else {
+    // 助手输出按 Markdown 子集渲染：标题 / 列表 / 表格 / 围栏代码块 + 复制按钮。
+    bubble.classList.add('md');
+    bubble.innerHTML = renderMarkdown(text);
+  }
   wrap.appendChild(bubble);
   mountChatNode(wrap);
 }
@@ -1086,8 +1253,25 @@ function renderConclusion(task) {
     conclusionBlockEl.appendChild(body);
     mountChatNode(conclusionBlockEl);
   }
-  conclusionBlockEl.querySelector('.conclusion-body').textContent = text;
+  const body = conclusionBlockEl.querySelector('.conclusion-body');
+  // 结论是模型写给用户看的成品（实际含 Markdown）→ 按子集渲染，与 DeepSeek 网页版一致的观感。
+  body.classList.add('md');
+  body.innerHTML = renderMarkdown(text);
 }
+
+// 代码块「复制」：委托到 document，省得每渲染一块就重新绑定一次。
+document.addEventListener('click', async (event) => {
+  const btn = event.target && event.target.closest ? event.target.closest('.md-copy') : null;
+  if (!btn) return;
+  const code = btn.closest('.md-code') ? btn.closest('.md-code').querySelector('code') : null;
+  if (!code) return;
+  await copyToClipboard(code.textContent);
+  const original = btn.textContent;
+  btn.textContent = '已复制';
+  setTimeout(() => {
+    btn.textContent = original;
+  }, 1200);
+});
 
 /** 渲染评审会纪要卡片（只渲染，不写会话记录）。
  *

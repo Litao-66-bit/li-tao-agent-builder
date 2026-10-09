@@ -930,6 +930,117 @@ class TestConclusionBlock:
         assert "white-space: pre-wrap" in css[start : start + 300]
 
 
+class TestMarkdownRendering:
+    """助手输出按 Markdown 子集渲染（对齐 DeepSeek 网页版的正文形态）。
+
+    背景（实测）：结论与助手消息此前都是 `textContent`（生文本）—— 模型写的
+    `- 列表` / `**加粗**` / 围栏代码块全部原样显示，这是与 DeepSeek 网页版差距最大的一处。
+    """
+
+    def test_渲染函数先转义再拼白名单标签(self) -> None:
+        source = _read("frontend/js/app.js")
+        body = _function_body(source, "renderMarkdown")
+        assert "escapeHtml(" in body
+        assert "md-code" in body
+        assert "md-copy" in body
+
+    def test_结论用_markdown_渲染而非纯文本(self) -> None:
+        source = _read("frontend/js/app.js")
+        body = _function_body(source, "renderConclusion")
+        assert "renderMarkdown(text)" in body
+        assert "innerHTML" in body
+        assert "textContent = text" not in body  # 这条正是原先的生文本写法
+
+    def test_助手消息渲染_markdown_用户消息保持纯文本(self) -> None:
+        source = _read("frontend/js/app.js")
+        body = _function_body(source, "renderMessage")
+        assert "renderMarkdown(text)" in body
+        assert "role === 'user'" in body
+        assert "textContent = text" in body  # 用户那条仍按纯文本，不做格式化
+
+    def test_代码块复制有委托处理(self) -> None:
+        source = _read("frontend/js/app.js")
+        assert ".md-copy" in source
+        assert "copyToClipboard(code.textContent)" in source
+
+    def test_样式覆盖_md_正文与代码卡(self) -> None:
+        css = _read("frontend/styles.css")
+        for selector in (".md p {", ".md table {", ".md-code {", ".md-copy {"):
+            assert selector in css, f"styles.css 缺少 {selector}"
+        # Markdown 正文不能沿用 pre-wrap（标签间换行会被渲染成多余空行）
+        assert ".md {" in css
+        start = css.index(".md {")
+        assert "white-space: normal" in css[start : start + 200]
+
+    def test_代码块与表格样式只用token(self) -> None:
+        css = _read("frontend/styles.css")
+        for anchor in (".md-code {", ".md-copy {"):
+            block = css[css.index(anchor) : css.index(anchor) + 260]
+            assert "#" not in block, f"{anchor} 写死了颜色"
+
+
+class TestMarkdownRenderingBehavior:
+    """用 node **真跑**渲染器（没有 node 的环境自动跳过）。
+
+    为什么值得单独一组：本文件其余前端测试都是「读源码做字符串断言」——能保证"写了这段代码"，
+    保证不了"渲染结果对"。实测正是这组抓到一处真 bug：先 escapeHtml 会把 `>` 变成 `&gt;`，
+    于是引用块的 `> ` 标记再也匹配不上，引用被当普通段落渲染了。
+    """
+
+    def test_转义之后引用_代码块_XSS_都正确(self, tmp_path) -> None:
+        import json
+        import shutil
+        import subprocess
+
+        import pytest
+
+        node = shutil.which("node")
+        if not node:
+            pytest.skip("本环境没有 node，跳过渲染行为验证")
+
+        source = _read("frontend/js/app.js")
+
+        def extract(name: str) -> str:
+            start = source.index(f"function {name}(")
+            brace = source.index("{", start)
+            depth = 0
+            for idx in range(brace, len(source)):
+                if source[idx] == "{":
+                    depth += 1
+                elif source[idx] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return source[start : idx + 1]
+            raise AssertionError(f"函数不配对: {name}")
+
+        sample = (
+            "# 标题\n\n"
+            "**加粗** 与 `行内码`\n\n"
+            "- 项一\n- 项二\n\n"
+            "```python\nprint(1)\n```\n\n"
+            "> 引用一行\n\n"
+            "<script>alert(1)</script>\n"
+        )
+        js = "\n".join(extract(n) for n in ("escapeHtml", "mdInline", "renderMarkdown"))
+        js += f"\nconst sample = {json.dumps(sample)};\nconsole.log(renderMarkdown(sample));\n"
+        script = tmp_path / "md-check.js"
+        script.write_text(js, encoding="utf-8")
+
+        proc = subprocess.run(
+            [node, str(script)], capture_output=True, text=True, encoding="utf-8", check=False
+        )
+        out = proc.stdout or ""
+        assert out, proc.stderr  # node 起不来/语法错误时给出原因
+
+        assert "<h1>标题</h1>" in out
+        assert "<strong>加粗</strong>" in out
+        assert "<blockquote>" in out  # ← 先转义后仍要认得 `&gt;` 标记
+        assert "md-code" in out and "md-copy" in out
+        # XSS：样本里的 <script> 只能以实体形式出现
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out
+
+
 class TestFileTreeKeepsCollapsedState:
     """回归：↻ 刷新重建文件树时，折叠状态不再被重置（实测折叠的目录又展开了）。"""
 
