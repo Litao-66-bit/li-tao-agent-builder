@@ -309,6 +309,60 @@ test_run 本机跑不通（改用 sys.executable -m pytest）、
   ② 浏览器自动化已接入（Playwright MCP 驱动本机 Chrome，工具名 `mcp__browser__*`），
   安装/验证/回滚见 `.dsh-scratch/BROWSER-MCP.md`。
 
+## 今日完成（2026-10-09）：让 agent 真正跑通 + 仓库对齐
+
+用户诉求原话：「**必须要，让 Agent，跑出更高的质量**」；起因是原任务「帮我做一个论文调研 agent」反复跑不通。
+
+### 结果对比（同一需求、同一工作区）
+
+| | 失败那轮（`cea128b8`） | 现在 |
+|---|---|---|
+| 终止 / 状态 | `stagnant` / `failed` | **`final` / `verifying`** |
+| 步数 | 8 步（0 产物） | 11 步（预算 20，空转 0） |
+| 测试 | 一次没通过 | **9 项全部通过**（独立复核一致） |
+| 结论 | 兜底「已停下」 | 模型自己的完整交付说明 + 系统核对事实行 |
+
+### 11 处根因（每处都有实测证据 + 回归测试）
+
+| # | 现象（实测） | 根因 | 修复 |
+|---|---|---|---|
+| 1 | 模型连续 **4 次**读同一个 6.6k 文件，思考里写「需要看到 `__init__` 的真实签名」，8 步 0 产物空转 | 观察窗口只有 2000 字，**大文件尾部永远读不到** | `file_read` 加 `start_line/end_line`；裁剪时附**全文符号轮廓** |
+| 2 | 模型一次要 `start_line=65/end_line=306`（241 行）→ 又被截断 → 又读不全 | 截断提示只说"已截断"，没给可操作信息 | 提示写明「原文 N 字 / 共 M 行 / 看的是前 K 行 / **一次 ≤50 行**」 |
+| 3 | R3 因 `ImportError` 失败 → 模型重写测试 → R7 对同一 target 跑出**新症状**，却被判"重复失败"掐死 | 失败指纹只取前 200 字，而 pytest 失败原文**开头永远是「失败 N 项；〈测试名〉」**，真正区分病因的异常在**尾部** | 指纹覆盖**整条**失败原文（并抹掉 pytest 耗时噪声） |
+| 4 | 连读 6 轮、思考里根因全对，却**一步不改**；第 9 步又跑同一个 `test_run` | 没有任何机制要求它"必须动手" | **系统纠正**：连续 ≥3 轮只读且验证仍失败 → 提示词里硬性要求给出改动或 `kind=final` |
+| 5 | 模型发 `content="PLACEHOLDER"` 的覆盖写，把**已通过验证的实现整个抹掉** | `file_write` 接受任意内容；模型在"重写 16.6k 字符"压力下退化成占位符 | **占位符护栏**：整份内容是占位符 → 拒绝写入（文件一字节不动，标不可重试） |
+| 6 | 结论对**已产出**的 `paper_survey_agent/test_agent.py` 报「本任务未产出」 | 产物名在**比对之前**就被截断成 `…/test_agent.py`，逻辑与展示混用同一个值 | 逻辑用完整路径；短化只发生在展示处 |
+| 7 | 改一个函数签名只能整份重写 473 行 / 16.6k 字符 → 退化成占位符 → 干脆不写 | **没有局部修改能力** | 新增 **`file_edit`**（精确替换 + 换行等价匹配 + 改后回灌符号轮廓） |
+| 8 | `file_edit` 接进权限矩阵与派发表后**仍然**报「任务超出代码范围」 | 角色**实现层**还有第三份清单 `CODE_ACTIONS`/`DOC_ACTIONS` —— **三层都接才算可用** | 三层对齐 + 补"走角色派发"的回归测试（原来只直接调工具，所以漏了） |
+| 9 | `file_edit` 在真实文件上 4 次全部「找不到 old_string」，而 `code_search` 明确指出该行存在、文本一模一样 | `file_write` 在 Windows 上把 `\n` 写成 **CRLF**，`file_read` 读回来是 **LF** → 精确匹配永远失败 | `file_edit` 按**换行等价**再匹配（并保持原文件换行）；`file_write` 不再做平台换行翻译 |
+| 10 | `code_search` 直接失败（`ripgrep 未安装或不在 PATH`）→ "搜代码定位函数"的核心动作全废；一轮里连撞两个失败 → 空转闸门第 3 步就掐死 | 把**可选外部二进制**当硬依赖 | 找不到 rg → 退到**内置纯 Python 扫描器**（有界、跳过隐藏/依赖目录、同格式输出并注明换了扫描器） |
+| 11 | agent 自己写的 `test_cli_end_to_end` 一直红：`PermissionError [Errno 13]`；模型思考里已正确识别"是 tmpdir 权限"，但**它修不掉** | 受限令牌下 `os.mkdir(0o700)` 写的显式权限连创建者都打不开（与 DSH 沙箱同因） | `test_run` 注入**受限环境兼容层**（只放宽临时目录下的 0o700）+ 子进程临时目录放进工作区 |
+
+### 护栏清单（**改这一层之前请逐条对照**）
+
+- **能力要接三层**：权限矩阵（`tools/permissions.py`）、派发表（`api/orchestrator.py: ACTION_ROLE_MAP`）、角色范围（`roles/*.py: CODE_ACTIONS`/`DOC_ACTIONS`）。漏任何一层 → 工具"存在但对模型不可见"或"可见但被角色拒绝"。
+- **确定性优先于提示词**：模型会犹豫、会退化。凡是"必须发生"的事（不许写占位符、必须动手、不许重复同一验证）都做成**确定性护栏**，提示词只做补充。
+- **失败指纹必须覆盖整条原文**：截断到开头会把不同病因判成同一症状，引发误杀（#3 就是这么来的）。
+- **"症状变了"就是进展**：重复失败闸门**与**空转计数器必须同一口径（新症状 → 清零），否则"改一处 → 跑一次 → 再改"的正常循环会被掐死。
+- **"会写盘的动作"清单有多处**：`api/artifacts.py: _FILE_PRODUCING_ACTIONS`、`roles/code_worker.py: FILE_PRODUCING_ACTIONS`、`narrate._WRITE_ACTIONS` —— 新增写盘动作时都要同步，否则产物不计入【已产出】、摘要还会漏。
+- **跨平台换行**：写盘不做平台翻译；读取/匹配要容忍 LF↔CRLF。**测试样本也要按平台给**（实测：`C:/Windows/evil.py` 在 POSIX 上并未越界 → CI 失败）。
+- **可选外部依赖必须有兜底**：`rg`（`code_search`）、临时目录权限（`test_run`）都在这一条上翻过车。
+- **人话文案有一致性测试**：新增动作要补中文名（`narrate.ACTION_TITLES`）与人话化分支，否则摘要会漏出英文机器输出。
+
+### 验证方法（**这一段最值得复用**）
+
+1. **镜像 worktree 复现 CI（决定性）**：`git worktree add --detach .dsh-scratch/ciN HEAD` → 拿到与 CI **完全相同的树**（含只在远端的文件），再用与 CI 同版本的 ruff/pytest 跑 `ruff check .` + `pytest`。
+   - 反面教训：直接在**工作区**跑测试会得到 6 failed + 1 error 的**假象**（`agent_builder/contracts/messages.py`、`NOTICE`、`PRIVACY.md`、`SECURITY.md` 等只在远端的文件缺失），很容易把人带偏。
+2. **CI 日志没权限时用注解取证**：拿不到 `actions:read` 时，临时经 `pyproject` 的 `pytest11` 入口挂一个只上报的插件，把失败写成 `::error` → GitHub 注解**公开可读**，可直接定位失败用例。
+   - 坑：`pytest_runtest_logreport` 里的 `print` **会被 pytest 捕获吞掉**，只有 `pytest_terminal_summary` 的 print 会进 CI 日志。
+3. **只读核对远端**：`git ls-remote` 看真实 HEAD（本地缓存的 `origin/main` 可能是旧的）；GitHub API `/commits/<sha>/check-runs` 看结论、`/check-runs/<id>/annotations` 看明细。
+
+### 操作陷阱（都亲自踩过）
+
+- **绝不对已推送的提交 `--amend`**（会被判 `non-fast-forward` 拒收）→ 在已推送提交**之上追加**新提交。
+- **不要用 PowerShell 做源码文本往返**：PS 5.1 的 `Get-Content`/`WriteAllLines` 默认非 UTF-8，会把中文字符串读坏（实测把 `test_contracts.py` 写成 `unterminated string literal`）→ 一律用 Python `utf-8` + `newline=""` 读写，并 `ast.parse` 自检。
+- **RUF100**：写无用的 `# noqa` 会让 `ruff check .` 失败；而 lint 失败会让 pytest 被 **skip**（看起来像"测试没跑"）。
+
 ## 基础运行环境
 
 - **操作系统**：Windows + PowerShell
@@ -317,7 +371,11 @@ test_run 本机跑不通（改用 sys.executable -m pytest）、
 - **依赖装法**：沙箱禁止写解释器 `site-packages` 的 `Scripts\*.exe`，故用 `pip install --target .deps` + 启动时 `PYTHONPATH=.deps`；`pyproject.toml` 的 ruff 已 `exclude = [".deps", "_sample_backup"]`（后者是实测产物草稿目录，非项目源码）
 - **后端**：FastAPI + uvicorn，端口 **8000**；CORS 白名单**仅** `http://127.0.0.1:8080`（换端口会被 CORS 拦，本会话验证时踩过）
 - **前端**：纯静态 HTML/CSS/JS（无构建、无 npm），静态服务器 **8080**
-- **GitHub**：`Litao-66-bit/li-tao-agent-builder`，branch `main`；**本地无 `.git`**，推送只能走 REST API
+- **GitHub**：`Litao-66-bit/li-tao-agent-builder`，branch `main`。
+  **2026-10-09 起本地已有 `.git`**（在项目根 `git init` 建的，父提交直接站在远端 HEAD 上，因此推送是快进、远端独有文件自动保留）：
+  - **HTTPS 必须带 `-c http.sslBackend=openssl`**（默认 schannel 报 `SEC_E_NO_CREDENTIALS`）；SSH 在 DSH 沙箱里**跑不起来**（`sh.exe: couldn't create signal pipe`）；推送网络很抖（约 1/3 成功）→ 必须带重试。
+  - **fine-grained PAT**：`Administration: Read and write` ≠ 能推代码，要的是 **`Contents: Read and write`**；"Public repositories" 模式天生只读。
+  - 只加白名单文件、**绝不 `git add -A`**（会把远端独有文件记成删除）；agent 产物（`paper_agent.py` 等）与 `.deps/`、`_sample_backup/`、`.dsh-scratch/`、`.trae/` 都排除在外。
 - **语言**：代码注释 / commit message / 文档一律中文
 
 ## 启动与校验命令
@@ -402,7 +460,16 @@ node --check frontend/js/app.js
 
 ## 未推送状态
 
-- 本会话全部改动**未推送**（本地无 `.git`）。想确认「到底哪些没推」，最可靠的做法是拉取远端 `main` 的 tree 与本地文件逐一比对。
+- **当前状态（2026-10-09 晚更新）**：`main` 已推进到 **`fd0f948`**，该提交的 CI **全绿**（3.10 / 3.11 / 3.12 三个 job 全 success）。
+  另有**本地已验证、待推送**的提交（本轮文档/lock 对齐 + 本文件）：
+  `e1ee7a9`（README 按事实更新 + requirements.lock 与 pyproject 对齐）、
+  `2ad2e7d`（NOTICE 去掉 langgraph 声明 + `tests/test_p2.py` 的 lock 一致性断言 + 清理失效注释）。
+  - **待推送原因**：PAT 在最后一步已失效（GitHub 返回 `remote: Invalid username or token`）。
+  - **补推方式（二选一）**：① 换新 PAT（`Contents: Read and write`）后 `git push`（记得 `-c http.sslBackend=openssl` + 多层重试）；
+    ② 在 clone `C:\Users\李陶\li-tao-agent-builder`（SSH 通道、**不需要 token**）里跑
+    `git fetch "<本项目根目录>" main` 然后 `git push origin FETCH_HEAD:main` —— 是**快进推送**。
+- 下面这几段是 **2026-10-09 早些时候（推送之前）的历史盘点**，保留作为"当时如何逐文件核对差异"的方法记录：
+- 本会话全部改动**未推送**（当时本地无 `.git`）。想确认「到底哪些没推」，最可靠的做法是拉取远端 `main` 的 tree 与本地文件逐一比对。
 - **2026-10-09 已按上述办法精确盘点**（免 token：远端 `main` 的 tree 与本地逐文件比 git blob 哈希，
   脚本 `.dsh-scratch/diff_remote.py`，四类完整清单 `.dsh-scratch/unpushed-report.txt`）：
   远端 HEAD `33eb2aa`（最后推送 2026-09-30 14:17）、157 个文件；**内容不同 60 个**、
