@@ -21,6 +21,12 @@ dev = [
     "httpx>=0.27",
 ]
 
+# ⚠️ 临时诊断：把 CI 上的 pytest 失败以**公开可读的 GitHub Actions 注解**带出，
+# 便于在不额外授权（actions:read）的情况下定位 Linux 特有的失败。
+# 定位并修好后，连同 agent_builder/tools/pytest_gha_report.py 一起删除。
+[project.entry-points.pytest11]
+gha-report = "agent_builder.tools.pytest_gha_report"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
