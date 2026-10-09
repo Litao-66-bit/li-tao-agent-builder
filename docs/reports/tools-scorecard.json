@@ -1,0 +1,1590 @@
+{
+  "tools": [
+    {
+      "tool": "approval_request",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "conductor",
+        "operator"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['conductor', 'operator']; 声明不完备（实授但未声明，非安全项）: ['conductor']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "11 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "audit_log",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "auditor",
+        "code_worker",
+        "conductor",
+        "data_analyst",
+        "decomposer",
+        "doc_worker",
+        "fact_checker",
+        "gatekeeper",
+        "historian",
+        "impact_analyzer",
+        "memory_keeper",
+        "operator",
+        "proposer",
+        "router",
+        "scheduler",
+        "searcher",
+        "summarizer",
+        "test_runner"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['auditor', 'code_worker', 'conductor', 'data_analyst', 'decomposer', 'doc_worker', 'fact_checker', 'gatekeeper', 'historian', 'impact_analyzer', 'memory_keeper', 'operator', 'proposer', 'router', 'scheduler', 'searcher', 'summarizer', 'test_runner']; 声明不完备（实授但未声明，非安全项）: ['auditor', 'code_worker', 'conductor', 'data_analyst', 'decomposer', 'doc_worker', 'fact_checker', 'gatekeeper', 'historian', 'impact_analyzer', 'memory_keeper', 'proposer', 'router', 'scheduler', 'searcher', 'summarizer', 'test_runner']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "16 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "change_notify",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "conductor",
+        "historian",
+        "operator"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['conductor', 'historian', 'operator']; 声明不完备（实授但未声明，非安全项）: ['conductor', 'historian']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "13 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "citation_check",
+      "risk_level": "low",
+      "timeout_s": 120.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "data_analyst",
+        "doc_worker",
+        "fact_checker",
+        "operator",
+        "searcher",
+        "test_runner"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['data_analyst', 'doc_worker', 'fact_checker', 'operator', 'searcher', 'test_runner']; 声明不完备（实授但未声明，非安全项）: ['data_analyst', 'doc_worker', 'fact_checker', 'searcher', 'test_runner']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "18 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "code_search",
+      "risk_level": "low",
+      "timeout_s": 30.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "code_worker",
+        "fact_checker",
+        "impact_analyzer",
+        "operator",
+        "test_runner"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['code_worker', 'fact_checker', 'impact_analyzer', 'operator', 'test_runner']; 声明不完备（实授但未声明，非安全项）: ['code_worker', 'fact_checker', 'impact_analyzer', 'test_runner']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "18 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "config_read",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "auditor",
+        "conductor",
+        "decomposer",
+        "impact_analyzer",
+        "operator",
+        "proposer",
+        "router",
+        "scheduler"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['auditor', 'conductor', 'decomposer', 'impact_analyzer', 'operator', 'proposer', 'router', 'scheduler']; 声明不完备（实授但未声明，非安全项）: ['auditor', 'conductor', 'decomposer', 'impact_analyzer', 'proposer', 'router', 'scheduler']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "12 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "council_build_minutes",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "conductor"
+      ],
+      "granted_roles": [
+        "conductor"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['conductor']; 实授=['conductor']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "17 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "council_check_opinion",
+      "risk_level": "low",
+      "timeout_s": 5.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "conductor"
+      ],
+      "granted_roles": [
+        "conductor"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['conductor']; 实授=['conductor']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "17 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "data_query",
+      "risk_level": "low",
+      "timeout_s": 15.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "data_analyst",
+        "operator"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['data_analyst', 'operator']; 声明不完备（实授但未声明，非安全项）: ['data_analyst']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "20 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "diff_preview",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "impact_analyzer",
+        "operator",
+        "proposer"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['impact_analyzer', 'operator', 'proposer']; 声明不完备（实授但未声明，非安全项）: ['impact_analyzer', 'proposer']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "15 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "file_delete",
+      "risk_level": "high",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "operator"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['operator']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=high; 审批门=已挂"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "13 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "file_edit",
+      "risk_level": "medium",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "code_worker",
+        "doc_worker",
+        "operator"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['code_worker', 'doc_worker', 'operator']; 声明不完备（实授但未声明，非安全项）: ['code_worker', 'doc_worker']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=medium; 审批门=已挂"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "15 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "file_list",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "code_worker",
+        "operator"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['code_worker', 'operator']; 声明不完备（实授但未声明，非安全项）: ['code_worker']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "18 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "file_read",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "auditor",
+        "code_worker",
+        "data_analyst",
+        "doc_worker",
+        "fact_checker",
+        "historian",
+        "impact_analyzer",
+        "operator",
+        "proposer",
+        "summarizer",
+        "test_runner"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['auditor', 'code_worker', 'data_analyst', 'doc_worker', 'fact_checker', 'historian', 'impact_analyzer', 'operator', 'proposer', 'summarizer', 'test_runner']; 声明不完备（实授但未声明，非安全项）: ['auditor', 'code_worker', 'data_analyst', 'doc_worker', 'fact_checker', 'historian', 'impact_analyzer', 'proposer', 'summarizer', 'test_runner']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "24 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "file_write",
+      "risk_level": "medium",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "code_worker",
+        "doc_worker",
+        "operator"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['code_worker', 'doc_worker', 'operator']; 声明不完备（实授但未声明，非安全项）: ['code_worker', 'doc_worker']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=medium; 审批门=已挂"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "21 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "git_commit",
+      "risk_level": "high",
+      "timeout_s": 30.0,
+      "cost_band": "medium",
+      "declared_roles": [
+        "sub_architect"
+      ],
+      "granted_roles": [
+        "gatekeeper",
+        "sub_architect"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['sub_architect']; 实授=['gatekeeper', 'sub_architect']; 声明不完备（实授但未声明，非安全项）: ['gatekeeper']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=high; 审批门=已挂"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "12 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "git_log",
+      "risk_level": "low",
+      "timeout_s": 15.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator",
+        "sub_architect"
+      ],
+      "granted_roles": [
+        "historian",
+        "operator",
+        "sub_architect"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator', 'sub_architect']; 实授=['historian', 'operator', 'sub_architect']; 声明不完备（实授但未声明，非安全项）: ['historian']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "14 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "memory_forget",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "memory_manager"
+      ],
+      "granted_roles": [
+        "memory_keeper",
+        "memory_manager"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['memory_manager']; 实授=['memory_keeper', 'memory_manager']; 声明不完备（实授但未声明，非安全项）: ['memory_keeper']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "15 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "memory_read",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "memory_manager",
+        "operator"
+      ],
+      "granted_roles": [
+        "auditor",
+        "code_worker",
+        "conductor",
+        "data_analyst",
+        "decomposer",
+        "doc_worker",
+        "fact_checker",
+        "gatekeeper",
+        "historian",
+        "impact_analyzer",
+        "memory_keeper",
+        "memory_manager",
+        "operator",
+        "proposer",
+        "scheduler",
+        "searcher",
+        "summarizer",
+        "test_runner"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['memory_manager', 'operator']; 实授=['auditor', 'code_worker', 'conductor', 'data_analyst', 'decomposer', 'doc_worker', 'fact_checker', 'gatekeeper', 'historian', 'impact_analyzer', 'memory_keeper', 'memory_manager', 'operator', 'proposer', 'scheduler', 'searcher', 'summarizer', 'test_runner']; 声明不完备（实授但未声明，非安全项）: ['auditor', 'code_worker', 'conductor', 'data_analyst', 'decomposer', 'doc_worker', 'fact_checker', 'gatekeeper', 'historian', 'impact_analyzer', 'memory_keeper', 'proposer', 'scheduler', 'searcher', 'summarizer', 'test_runner']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "18 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "memory_write",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "memory_manager"
+      ],
+      "granted_roles": [
+        "historian",
+        "memory_keeper",
+        "memory_manager",
+        "summarizer"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['memory_manager']; 实授=['historian', 'memory_keeper', 'memory_manager', 'summarizer']; 声明不完备（实授但未声明，非安全项）: ['historian', 'memory_keeper', 'summarizer']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "17 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "metric_collect",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "auditor",
+        "operator",
+        "proposer",
+        "router"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['auditor', 'operator', 'proposer', 'router']; 声明不完备（实授但未声明，非安全项）: ['auditor', 'proposer', 'router']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "14 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "plan_validate",
+      "risk_level": "low",
+      "timeout_s": 10.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "conductor",
+        "operator",
+        "router",
+        "scheduler"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['conductor', 'operator', 'router', 'scheduler']; 声明不完备（实授但未声明，非安全项）: ['conductor', 'router', 'scheduler']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "20 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "rollback",
+      "risk_level": "high",
+      "timeout_s": 30.0,
+      "cost_band": "medium",
+      "declared_roles": [
+        "sub_architect"
+      ],
+      "granted_roles": [
+        "gatekeeper",
+        "sub_architect"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['sub_architect']; 实授=['gatekeeper', 'sub_architect']; 声明不完备（实授但未声明，非安全项）: ['gatekeeper']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=high; 审批门=已挂"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "9 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "sandbox_run",
+      "risk_level": "medium",
+      "timeout_s": 60.0,
+      "cost_band": "medium",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "code_worker",
+        "data_analyst",
+        "gatekeeper",
+        "operator",
+        "test_runner"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['code_worker', 'data_analyst', 'gatekeeper', 'operator', 'test_runner']; 声明不完备（实授但未声明，非安全项）: ['code_worker', 'data_analyst', 'gatekeeper', 'test_runner']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=medium; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "19 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "test_run",
+      "risk_level": "medium",
+      "timeout_s": 120.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "gatekeeper",
+        "operator",
+        "test_runner"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['gatekeeper', 'operator', 'test_runner']; 声明不完备（实授但未声明，非安全项）: ['gatekeeper', 'test_runner']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=medium; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "21 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "web_fetch",
+      "risk_level": "low",
+      "timeout_s": 30.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "doc_worker",
+        "fact_checker",
+        "operator",
+        "searcher"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['doc_worker', 'fact_checker', 'operator', 'searcher']; 声明不完备（实授但未声明，非安全项）: ['doc_worker', 'fact_checker', 'searcher']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "18 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "tool": "web_search",
+      "risk_level": "low",
+      "timeout_s": 30.0,
+      "cost_band": "low",
+      "declared_roles": [
+        "operator"
+      ],
+      "granted_roles": [
+        "operator",
+        "searcher"
+      ],
+      "dimensions": [
+        {
+          "name": "元数据完整性",
+          "score": 5,
+          "max_score": 5,
+          "note": "七要素齐全"
+        },
+        {
+          "name": "Schema 质量",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约完备"
+        },
+        {
+          "name": "最小权限",
+          "score": 5,
+          "max_score": 5,
+          "note": "声明=['operator']; 实授=['operator', 'searcher']; 声明不完备（实授但未声明，非安全项）: ['searcher']"
+        },
+        {
+          "name": "风险分级正确",
+          "score": 5,
+          "max_score": 5,
+          "note": "risk=low; 审批门=不需要"
+        },
+        {
+          "name": "错误语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约异常映射完整"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "18 个用例"
+        }
+      ],
+      "total": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    }
+  ],
+  "doc_drift": {
+    "未收录进文档": [],
+    "角色声明漂移": []
+  }
+}

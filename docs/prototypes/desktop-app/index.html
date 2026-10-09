@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Builder · 桌面版原型</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ══════════ 桌面层：壁纸 + 桌面图标 + 任务栏 ══════════ -->
+  <div class="desktop">
+    <div class="desktop-icons">
+      <button type="button" class="desktop-icon" id="desktopIconApp" title="双击打开 Agent Builder">
+        <span class="desktop-icon-glyph" aria-hidden="true">🧭</span>
+        <span class="desktop-icon-label">Agent Builder</span>
+      </button>
+    </div>
+
+    <div class="taskbar" id="taskbar">
+      <button type="button" class="taskbar-start" title="开始（原型示意）" aria-label="开始">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <rect x="1" y="1" width="6" height="6" rx="1" fill="currentColor"/>
+          <rect x="9" y="1" width="6" height="6" rx="1" fill="currentColor"/>
+          <rect x="1" y="9" width="6" height="6" rx="1" fill="currentColor"/>
+          <rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor"/>
+        </svg>
+      </button>
+      <div class="taskbar-items">
+        <button type="button" class="taskbar-item" id="taskbarAppBtn" aria-pressed="true">
+          <span class="taskbar-item-glyph" aria-hidden="true">🧭</span>
+          <span class="taskbar-item-label">Agent Builder</span>
+        </button>
+      </div>
+      <div class="taskbar-tray">
+        <span class="tray-item" id="trayClock" title="系统时间（原型示意）">--:--</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ 应用窗口 ══════════ -->
+  <div class="app-window" id="appWindow" aria-label="Agent Builder 应用窗口">
+
+    <!-- ── 标题栏（无边框窗口拖拽区 + 窗口控制）── -->
+    <div class="titlebar">
+      <div class="titlebar-left">
+        <span class="app-icon" aria-hidden="true">🧭</span>
+        <span class="app-name">Agent Builder</span>
+        <span class="titlebar-sep" aria-hidden="true"></span>
+        <button type="button" class="titlebar-project" id="titlebarProject" title="切换工作区">
+          <span class="titlebar-project-dot" aria-hidden="true"></span>
+          <span id="titlebarProjectName">workspace</span>
+        </button>
+      </div>
+      <div class="window-controls">
+        <button type="button" class="win-btn" id="winMin" title="最小化" aria-label="最小化">
+          <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><rect x="1.5" y="5.4" width="9" height="1.2" fill="currentColor"/></svg>
+        </button>
+        <button type="button" class="win-btn" id="winMax" title="最大化 / 还原" aria-label="最大化" aria-pressed="false">
+          <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+        <button type="button" class="win-btn win-close" id="winClose" title="关闭" aria-label="关闭">
+          <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M3 3 L9 9 M9 3 L3 9" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ── 菜单栏 ── -->
+    <nav class="menubar" id="menubar" aria-label="主菜单">
+      <button type="button" class="menu-root" data-menu="file" aria-haspopup="true" aria-expanded="false">文件</button>
+      <button type="button" class="menu-root" data-menu="edit" aria-haspopup="true" aria-expanded="false">编辑</button>
+      <button type="button" class="menu-root" data-menu="view" aria-haspopup="true" aria-expanded="false">视图</button>
+      <button type="button" class="menu-root" data-menu="project" aria-haspopup="true" aria-expanded="false">项目</button>
+      <button type="button" class="menu-root" data-menu="task" aria-haspopup="true" aria-expanded="false">任务</button>
+      <button type="button" class="menu-root" data-menu="help" aria-haspopup="true" aria-expanded="false">帮助</button>
+    </nav>
+
+    <!-- ── 工具栏：六阶段状态机 + 当前任务 ── -->
+    <div class="toolbar">
+      <ol class="stage-bar" id="stageBar" aria-label="任务阶段">
+        <li class="stage">需求</li>
+        <li class="stage">计划</li>
+        <li class="stage">确认</li>
+        <li class="stage">执行</li>
+        <li class="stage">验证</li>
+        <li class="stage">汇报</li>
+      </ol>
+      <span class="toolbar-task" id="taskChip">未创建任务</span>
+    </div>
+
+    <!-- ── 窗口主体：三栏 ── -->
+    <div class="window-body">
+      <div class="main">
+
+        <div class="side-panels" id="sidePanels">
+
+          <!-- 左栏 -->
+          <aside class="sidebar-left">
+            <div class="panel">
+              <div class="panel-title">🔧 技能</div>
+              <div class="panel-hint">尚未接入后端，仅作展示</div>
+              <div class="skill-row">
+                <span class="skill-label">文件读写</span>
+                <label class="toggle" title="技能开关尚未接入后端，仅作展示">
+                  <input type="checkbox" aria-label="文件读写" checked>
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+              <div class="skill-row">
+                <span class="skill-label">联网搜索</span>
+                <label class="toggle" title="技能开关尚未接入后端，仅作展示">
+                  <input type="checkbox" aria-label="联网搜索">
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+              <div class="skill-row">
+                <span class="skill-label">命令执行 <span class="warn-badge" title="高风险操作，需审批">⚠</span></span>
+                <label class="toggle" title="技能开关尚未接入后端，仅作展示">
+                  <input type="checkbox" aria-label="命令执行">
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-title">🧩 插件</div>
+              <div class="plugin-item">· 海报生成</div>
+              <div class="plugin-item">· 网页抓取</div>
+              <div class="plugin-item">· Git 集成</div>
+              <button type="button" class="plugin-add" title="插件系统尚未接入后端">＋ 添加插件</button>
+            </div>
+
+            <div class="panel">
+              <div class="panel-title">📌 最近项目</div>
+              <div class="project-list" id="projectList"></div>
+            </div>
+
+            <div class="new-project-wrap">
+              <button type="button" class="new-project-btn" id="newProjectBtn" aria-haspopup="menu" aria-expanded="false">
+                <span class="big">＋ 新建项目</span>
+                <span class="sub">选择本地文件夹开始构建</span>
+              </button>
+              <div class="project-menu" id="projectMenu" role="menu" hidden>
+                <button type="button" class="project-menu-item" role="menuitem" data-action="open-folder">
+                  <span class="project-menu-icon" aria-hidden="true">📂</span>
+                  <span class="project-menu-text">
+                    <strong>打开本地文件夹</strong>
+                    <small>选一个已有目录作为工作区</small>
+                  </span>
+                </button>
+                <button type="button" class="project-menu-item" role="menuitem" data-action="new-folder">
+                  <span class="project-menu-icon" aria-hidden="true">🗂️</span>
+                  <span class="project-menu-text">
+                    <strong>新建文件夹</strong>
+                    <small>先选父目录，再命名新工作区</small>
+                  </span>
+                </button>
+                <button type="button" class="project-menu-item" role="menuitem" data-action="default-workspace">
+                  <span class="project-menu-icon" aria-hidden="true">↺</span>
+                  <span class="project-menu-text">
+                    <strong>使用默认工作区</strong>
+                    <small>回到内置默认目录</small>
+                  </span>
+                </button>
+              </div>
+            </div>
+          </aside>
+
+          <!-- 右栏 -->
+          <aside class="sidebar-right">
+            <div class="file-header">
+              <span class="file-title">📁 工作区文件</span>
+              <button type="button" class="file-refresh-btn" id="fileRefreshBtn" title="重新拉取工作区文件树">↻ 刷新</button>
+            </div>
+            <div class="file-path" id="workspacePath" title="">工作区 / workspace</div>
+            <div class="file-tree" id="fileTree"></div>
+          </aside>
+
+        </div>
+
+        <!-- 中栏 -->
+        <main class="chat-area" id="chatArea" aria-label="对话区">
+          <div class="chat-log" id="chatLog" role="log" aria-live="polite"></div>
+          <div class="handover-slot" id="handoverSlot" aria-live="polite"></div>
+        </main>
+
+      </div>
+    </div>
+
+    <!-- ── 底部：模型设置 + 输入 ── -->
+    <footer class="bottom-bar">
+      <div class="model-settings">
+        <div class="setting-chip" title="本次分解使用的模型（覆盖 DEEPSEEK_MODEL）">
+          模型
+          <select id="modelSelect" aria-label="模型">
+            <option>deepseek-chat</option>
+            <option>deepseek-reasoner</option>
+            <option>deepseek-v4-flash</option>
+            <option>gpt-4o</option>
+          </select>
+        </div>
+        <div class="setting-chip slider-wrap" title="LLM 采样温度（0=更确定，1=更发散）">
+          推理强度
+          <span class="slider-value" id="tempValue">0.3</span>
+          <input type="range" id="tempSlider" min="0" max="1" step="0.1" value="0.3" aria-label="推理强度">
+        </div>
+        <div class="setting-chip" title="产出详细度：详细=拆到可独立验证的原子粒度；精简=合并同类步骤">
+          高级
+          <select id="advancedSelect" aria-label="产出详细度">
+            <option value="default">默认</option>
+            <option value="detailed">详细</option>
+            <option value="concise">精简</option>
+          </select>
+        </div>
+        <div class="setting-chip key-chip" id="apiKeyInputChip">
+          <span class="key-display">⚿</span>
+          <input type="password" id="apiKeyInput" class="key-input" placeholder="输入 API 密钥"
+                 autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="API 密钥">
+          <button type="button" class="key-btn" id="apiKeySave">保存</button>
+        </div>
+        <div class="setting-chip" id="apiKeyStatusChip" hidden>
+          <span class="key-display">⚿ <span id="apiKeyStateText">已保存</span>
+            <span id="apiKeyMasked">—</span><span class="key-expiry" id="apiKeyExpiry"></span></span>
+          <button type="button" class="key-btn" id="apiKeyRotate" title="用新密钥替换当前密钥（不中断服务）">轮换</button>
+          <button type="button" class="key-btn key-btn-danger" id="apiKeyDelete">删除密钥</button>
+        </div>
+        <div class="setting-chip">
+          <label class="toggle">
+            <input type="checkbox" id="llmToggle" aria-label="LLM 拆分">
+            <span class="toggle-track"></span>
+          </label>
+          LLM 拆分
+        </div>
+        <div class="setting-chip" title="开启后执行阶段将追加一次「计划 ↔ 执行结果」一致性自检">
+          <label class="toggle">
+            <input type="checkbox" id="selfCheckToggle" aria-label="副结构自检">
+            <span class="toggle-track"></span>
+          </label>
+          副结构自检
+        </div>
+        <div class="setting-chip" title="开启后分解前先召开评审会：多个 Agent 角色独立表态并收敛方案（需配置密钥）">
+          <label class="toggle">
+            <input type="checkbox" id="councilToggle" aria-label="评审会">
+            <span class="toggle-track"></span>
+          </label>
+          评审会
+        </div>
+      </div>
+
+      <div class="input-row">
+        <textarea class="msg-input" id="msgInput" rows="1" aria-label="需求输入"
+                  placeholder="输入你的需求…（Enter 发送 / Shift+Enter 换行）"></textarea>
+        <button type="button" class="btn-secondary" id="interruptBtn"
+                title="仅执行阶段可中断（对应后端 EXECUTING → INTERRUPTED）">⏸ 中断</button>
+        <button type="button" class="btn-send" id="sendBtn">发送 ➤</button>
+      </div>
+    </footer>
+
+    <!-- ── 状态栏（桌面应用惯用）── -->
+    <div class="statusbar">
+      <button type="button" class="status-item" id="statusBackend" title="后端服务连通性">
+        <span class="status-dot" aria-hidden="true"></span>后端已连接
+      </button>
+      <button type="button" class="status-item" id="statusProject" title="当前工作区">📁 workspace</button>
+      <button type="button" class="status-item" id="statusModel" title="当前模型">deepseek-chat</button>
+      <button type="button" class="status-item" id="statusKey" title="API 密钥状态">⚿ 未配置密钥</button>
+      <span class="status-spacer"></span>
+      <button type="button" class="status-item" id="statusTask" title="当前任务状态">任务：未创建</button>
+      <span class="status-item status-muted" title="本原型为静态演示，所有数据均为假数据">原型 · mock 数据</span>
+    </div>
+
+    <!-- ══════════ 浮层（相对应用窗口定位，随窗口裁切）══════════ -->
+
+    <!-- 菜单下拉 -->
+  <div class="menu-popup" id="menuPopup" role="menu" hidden></div>
+
+  <!-- 文件树右键菜单 -->
+  <div class="context-menu" id="contextMenu" role="menu" hidden></div>
+
+  <!-- 文件查看器（应用内文档窗口） -->
+  <div class="file-viewer" id="fileViewer" hidden>
+    <div class="file-viewer-mask" data-close="1"></div>
+    <div class="file-viewer-panel" role="dialog" aria-modal="true" aria-labelledby="fileViewerPath" tabindex="-1">
+      <div class="file-viewer-head">
+        <span class="file-viewer-path" id="fileViewerPath">—</span>
+        <span class="file-viewer-meta" id="fileViewerMeta"></span>
+        <button type="button" class="key-btn" id="fileViewerSave">保存</button>
+        <button type="button" class="key-btn" id="fileViewerClose">关闭</button>
+      </div>
+      <textarea class="file-viewer-body" id="fileViewerBody" spellcheck="false" wrap="off"></textarea>
+    </div>
+  </div>
+
+  <!-- 系统「选择文件夹」对话框（原型：模拟后端弹出的原生对话框） -->
+  <div class="native-dialog" id="folderPicker" hidden>
+    <div class="native-dialog-mask"></div>
+    <div class="native-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="folderPickerTitle">
+      <div class="native-dialog-titlebar">
+        <span id="folderPickerTitle">选择文件夹</span>
+        <button type="button" class="native-dialog-close" id="folderPickerX" aria-label="关闭">✕</button>
+      </div>
+      <div class="native-dialog-path">
+        <span class="native-path-label">地址</span>
+        <span class="native-path-value" id="folderPickerPath">—</span>
+      </div>
+      <div class="native-dialog-list" id="folderPickerList"></div>
+      <div class="native-dialog-foot">
+        <span class="native-dialog-note">文件夹名由后端创建，名称仅允许字母/数字/下划线/中划线</span>
+        <div class="native-dialog-actions">
+          <button type="button" class="native-btn" id="folderPickerCancel">取消</button>
+          <button type="button" class="native-btn native-btn-primary" id="folderPickerConfirm">选择文件夹</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新建文件夹对话框 -->
+  <div class="project-dialog" id="newFolderDialog" hidden>
+    <div class="project-dialog-mask" data-close="1"></div>
+    <div class="project-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="newFolderTitle">
+      <div class="project-dialog-title" id="newFolderTitle">新建文件夹</div>
+      <label class="project-dialog-label" for="newFolderName">文件夹名</label>
+      <input type="text" class="project-dialog-input" id="newFolderName"
+             placeholder="例如 my-agent-project" autocomplete="off" spellcheck="false">
+      <div class="project-dialog-hint" id="newFolderParent">父目录：—</div>
+      <div class="project-dialog-actions">
+        <button type="button" class="key-btn" id="newFolderCancel">取消</button>
+        <button type="button" class="key-btn key-btn-primary" id="newFolderConfirm">创建并使用</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 关于对话框 -->
+  <div class="project-dialog" id="aboutDialog" hidden>
+    <div class="project-dialog-mask" data-close="1"></div>
+    <div class="project-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
+      <div class="project-dialog-title" id="aboutTitle">关于 Agent Builder</div>
+      <dl class="about-list">
+        <dt>版本</dt><dd id="aboutVersion">—</dd>
+        <dt>形态</dt><dd>桌面应用（原型）· 纯静态 HTML/CSS/JS</dd>
+        <dt>内核</dt><dd>FastAPI 状态机 + 20 角色 / 26 工具；密钥仅驻留服务端内存</dd>
+        <dt>说明</dt><dd>本原型用于验证「浏览器网页 → 桌面 app」的界面形态，不含真实后端。</dd>
+      </dl>
+      <div class="project-dialog-actions">
+        <button type="button" class="key-btn key-btn-primary" id="aboutClose">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  </div><!-- /app-window -->
+
+  <!-- ══════════ 演示控制台（浮于桌面，不属于应用窗口）══════════ -->
+  <aside class="demo-console" id="demoConsole" aria-label="演示控制台">
+    <div class="demo-console-head">
+      <span class="demo-console-title">演示控制台</span>
+      <button type="button" class="demo-console-close" id="demoConsoleClose" aria-label="收起演示控制台">✕</button>
+    </div>
+    <div class="demo-console-group">
+      <div class="demo-console-label">场景</div>
+      <div class="demo-console-row" id="scenarioRow">
+        <button type="button" class="demo-chip" data-scenario="empty">新建会话</button>
+        <button type="button" class="demo-chip" data-scenario="confirm">规划待确认</button>
+        <button type="button" class="demo-chip" data-scenario="executing">执行中</button>
+        <button type="button" class="demo-chip" data-scenario="interrupted">已中断</button>
+        <button type="button" class="demo-chip" data-scenario="delivered">已交付</button>
+        <button type="button" class="demo-chip" data-scenario="handover">交接提示</button>
+      </div>
+    </div>
+    <div class="demo-console-group">
+      <div class="demo-console-label">主题</div>
+      <div class="demo-console-row" id="themeRow">
+        <button type="button" class="demo-chip" data-theme="auto">跟随系统</button>
+        <button type="button" class="demo-chip" data-theme="light">浅色</button>
+        <button type="button" class="demo-chip" data-theme="dark">深色</button>
+      </div>
+    </div>
+    <div class="demo-console-group">
+      <div class="demo-console-label">窗口</div>
+      <div class="demo-console-row">
+        <button type="button" class="demo-chip" data-win="minimize">最小化</button>
+        <button type="button" class="demo-chip" data-win="maximize">最大化</button>
+        <button type="button" class="demo-chip" data-win="close">关闭</button>
+        <button type="button" class="demo-chip" data-win="restore">恢复窗口</button>
+      </div>
+    </div>
+    <p class="demo-console-note">点击「发送」可跑一遍脚本化流程；卡片上的按钮（批准 / 拒绝 / 评审会 / 中断 / 恢复）均已接线到桩接口。</p>
+  </aside>
+
+  <script src="mock.js"></script>
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+
+</body>
+</html>

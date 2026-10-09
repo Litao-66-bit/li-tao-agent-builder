@@ -62,19 +62,60 @@ class TestFileReadFunctional:
 # ── 边界 ────────────────────────────────────────────────────────
 
 
+class TestWorkspaceRelativeResolution:
+    """回归：工具路径的解析基准是**当前工作区**，不是进程 cwd。
+
+    实测背景：默认工作区恰好等于 cwd，所以此前看不出来；一旦用户切换工作区，
+    `path="tests"` 会按 cwd 解析 → ①被门卫误判「超出沙箱白名单」，②即便放行也读写错目录。
+    """
+
+    def test_相对路径按工作区解析(self, gatekeeper, workspace, tmp_path_factory, monkeypatch):
+        other = tmp_path_factory.mktemp("elsewhere")
+        monkeypatch.chdir(other)  # cwd 与工作区不同
+        (workspace / "a.txt").write_text("hi", encoding="utf-8")
+
+        call = _make_call("operator", "a.txt")  # 相对路径
+
+        assert registry.execute(gatekeeper, call).result == "hi"
+
+    def test_相对路径不会偷渡到cwd(self, workspace, tmp_path_factory, monkeypatch):
+        """反证：cwd 下同名文件不该被读到 —— 说明基准确实是工作区。"""
+        other = tmp_path_factory.mktemp("elsewhere2")
+        (other / "a.txt").write_text("from cwd", encoding="utf-8")
+        monkeypatch.chdir(other)
+        perms = {
+            "operator": RolePerm(
+                role="operator", allowed_tools=["file_read"], high_risk_tools=[]
+            ),
+        }
+        gk = ToolGatekeeper(perms, workspace_dir=workspace, correlation_id="c-rel")
+
+        call = _make_call("operator", "a.txt")
+        with pytest.raises(AgentError) as exc_info:
+            registry.execute(gk, call)
+
+        # 工作区里没有这个文件 → 走实现的「不存在」分支（而不是沙箱越界）。
+        assert exc_info.value.error_name == "E_VALIDATION"
+        assert "不存在" in exc_info.value.info.message
+
+
 class TestFileReadEdge:
     def test_missing_path_arg(self, gatekeeper):
-        # args 不含 path → 门卫 _check_sandbox_path 取到空串 → E_PERMISSION
+        # args 不含 path → 门卫 _check_sandbox_path 取到空串 → 拦下并记拒绝。
+        # 错误码是 E_VALIDATION（缺参数），**不是** E_PERMISSION —— 后者会把「模型忘了
+        # 给参数」说成「没权限」，实测中模型因此误判为"换个动作"而不是补参数重试。
         call = ToolCall(audit_id="a-e1", role="operator", tool="file_read", args={})
         with pytest.raises(AgentError) as exc_info:
             registry.execute(gatekeeper, call)
-        assert exc_info.value.error_name == "E_PERMISSION"
+        assert exc_info.value.error_name == "E_VALIDATION"
+        assert "缺少 path" in exc_info.value.info.message
+        assert gatekeeper.audit_log[-1].allowed is False  # 仍然被拒并留档
 
     def test_empty_path_string(self, gatekeeper):
         call = ToolCall(audit_id="a-e2", role="operator", tool="file_read", args={"path": ""})
         with pytest.raises(AgentError) as exc_info:
             registry.execute(gatekeeper, call)
-        assert exc_info.value.error_name == "E_PERMISSION"
+        assert exc_info.value.error_name == "E_VALIDATION"
 
     def test_nonexistent_file(self, gatekeeper, workspace):
         call = _make_call("operator", workspace / "nope.txt")
@@ -142,6 +183,109 @@ class TestFileReadSecurity:
         assert audit.allowed is True
         assert audit.tool == "file_read"
         assert audit.audit_id == "a-log"
+
+
+# ── 行范围读取（大文件尾部此前永远读不到）────────────────────────
+
+
+class TestFileReadRange:
+    """实测（用户任务 cea128b8）：观察窗口只有 2000 字，6.6k 字文件的 `__init__` 永远
+    进不了提示词，模型只能反复重读同一个文件直到空转停下。行范围是唯一的出路。"""
+
+    def test_按行范围读取带表头(self, gatekeeper, workspace):
+        target = workspace / "demo.py"
+        target.write_text("\n".join(f"line{i}" for i in range(1, 11)), encoding="utf-8")
+        call = registry.execute(
+            gatekeeper,
+            ToolCall(
+                audit_id="a-range",
+                role="operator",
+                tool="file_read",
+                args={"path": str(target), "start_line": 3, "end_line": 5},
+            ),
+        )
+        assert call.result == f"【{target} 第 3-5 行 / 共 10 行】\nline3\nline4\nline5"
+
+    def test_只给起始行读到尾(self, gatekeeper, workspace):
+        target = workspace / "demo.py"
+        target.write_text("\n".join(f"line{i}" for i in range(1, 6)), encoding="utf-8")
+        call = registry.execute(
+            gatekeeper,
+            ToolCall(
+                audit_id="a-range2",
+                role="operator",
+                tool="file_read",
+                args={"path": str(target), "start_line": 4},
+            ),
+        )
+        assert "第 4-5 行 / 共 5 行" in call.result
+        assert call.result.endswith("line4\nline5")
+
+    def test_结束行超界自动收敛到末行(self, gatekeeper, workspace):
+        target = workspace / "demo.py"
+        target.write_text("a\nb\nc", encoding="utf-8")
+        call = registry.execute(
+            gatekeeper,
+            ToolCall(
+                audit_id="a-range3",
+                role="operator",
+                tool="file_read",
+                args={"path": str(target), "start_line": 2, "end_line": 999},
+            ),
+        )
+        assert "第 2-3 行 / 共 3 行" in call.result
+
+    def test_起始行超界报参数错误(self, gatekeeper, workspace):
+        target = workspace / "demo.py"
+        target.write_text("a\nb", encoding="utf-8")
+        with pytest.raises(AgentError) as exc:
+            registry.execute(
+                gatekeeper,
+                ToolCall(
+                    audit_id="a-range4",
+                    role="operator",
+                    tool="file_read",
+                    args={"path": str(target), "start_line": 99},
+                ),
+            )
+        assert "超出文件行数" in str(exc.value)
+
+    def test_结束行小于起始行报参数错误(self, gatekeeper, workspace):
+        target = workspace / "demo.py"
+        target.write_text("a\nb\nc", encoding="utf-8")
+        with pytest.raises(AgentError) as exc:
+            registry.execute(
+                gatekeeper,
+                ToolCall(
+                    audit_id="a-range5",
+                    role="operator",
+                    tool="file_read",
+                    args={"path": str(target), "start_line": 3, "end_line": 1},
+                ),
+            )
+        assert "不能小于" in str(exc.value)
+
+    def test_起始行为0报参数错误(self, gatekeeper, workspace):
+        target = workspace / "demo.py"
+        target.write_text("a\nb", encoding="utf-8")
+        with pytest.raises(AgentError) as exc:
+            registry.execute(
+                gatekeeper,
+                ToolCall(
+                    audit_id="a-range6",
+                    role="operator",
+                    tool="file_read",
+                    args={"path": str(target), "start_line": 0},
+                ),
+            )
+        assert "必须 ≥ 1" in str(exc.value)
+
+    def test_签名里带上行范围参数(self):
+        """参数存在但不在签名里 = 模型不知道它存在（与 overwrite 同款教训）。"""
+        from agent_builder.api.role_catalog import action_signature
+
+        sig = action_signature("file_read")
+        assert "start_line" in sig and "end_line" in sig
 
 
 # ── 成本（大输出截断）───────────────────────────────────────────

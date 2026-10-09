@@ -47,7 +47,7 @@ class TaskEvent(str, Enum):
     INTERNAL_ERROR = "internal_error"  # 不可恢复内部错误 → failed
 
 
-# ── 转换表（契约 02 · 13 行转换 + 任意→failed 兜底）──────────────
+# ── 转换表（契约 02 · 14 行转换 + 任意→failed 兜底）──────────────
 
 _TRANSITIONS: dict[TaskStatus, dict[TaskEvent, TaskStatus]] = {
     TaskStatus.RECEIVED: {TaskEvent.REQ_CONFIRMED: TaskStatus.PLANNING},
@@ -67,6 +67,9 @@ _TRANSITIONS: dict[TaskStatus, dict[TaskEvent, TaskStatus]] = {
     TaskStatus.REWORKING: {TaskEvent.REWORK_DONE: TaskStatus.EXECUTING},
     TaskStatus.INTERRUPTED: {
         TaskEvent.RESUME: TaskStatus.EXECUTING,
+        # 「到点暂停」（高风险待放行）或手动中断后，用户仍可改计划 → 退回重新规划。
+        # 此前未定义该转换，导致暂停后点「改计划」必然 409（非法状态转换）。
+        TaskEvent.PLAN_REJECTED: TaskStatus.PLANNING,
         TaskEvent.ABORT: TaskStatus.FAILED,
     },
     TaskStatus.DELIVERING: {TaskEvent.DELIVERED: TaskStatus.DELIVERED},

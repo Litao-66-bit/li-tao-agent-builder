@@ -14,11 +14,24 @@ from pathlib import Path
 from typing import Any
 
 from agent_builder.contracts.errors import tool_error
+from agent_builder.tools.gatekeeper import current_workspace_dir
 from agent_builder.tools.registry import current_correlation_id
 
-# 默认记忆目录：用户主目录下的 .li-tao-agent。
-DEFAULT_MEMORY_DIR = Path.home() / ".li-tao-agent"
+# 默认记忆位置：**当前工作区内**的隐藏目录（不是用户主目录）。
+#
+# 此前默认是 ``Path.home()/".li-tao-agent"`` —— 落在工作区之外，而 memory_* 这类工具
+# **没有 path 参数、也不走门卫的沙箱校验**，于是它们直接读写了工作区外的用户主目录：
+# 实测在 Windows 上直接 ``WinError 5 拒绝访问``（模型只看到「读取记忆失败：权限不足」），
+# 而且读之前还会在用户主目录 ``mkdir``。放到工作区里既守住边界，也保证可读写。
+# 目录名以 ``.`` 开头 → 右栏产物树跳过隐藏目录，不打扰用户。
+DEFAULT_MEMORY_DIRNAME = ".agent-memory"
 DEFAULT_MEMORY_FILE = "memory.json"
+
+
+def default_memory_dir() -> Path:
+    """默认记忆目录：当前工作区（沙箱基准）下的 ``.agent-memory``；无上下文时退回 cwd。"""
+    root = current_workspace_dir.get() or Path.cwd()
+    return root / DEFAULT_MEMORY_DIRNAME
 
 
 def _get_memory_path() -> Path:
@@ -26,8 +39,9 @@ def _get_memory_path() -> Path:
     env = os.environ.get("AGENT_MEMORY_FILE")
     if env:
         return Path(env)
-    DEFAULT_MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    return DEFAULT_MEMORY_DIR / DEFAULT_MEMORY_FILE
+    target = default_memory_dir() / DEFAULT_MEMORY_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 def load_memory() -> dict[str, list[dict[str, Any]]]:
@@ -90,10 +104,11 @@ def decode_sensitive(encoded: str) -> str:
 
 
 __all__ = [
-    "DEFAULT_MEMORY_DIR",
+    "DEFAULT_MEMORY_DIRNAME",
     "DEFAULT_MEMORY_FILE",
     "_get_memory_path",
     "decode_sensitive",
+    "default_memory_dir",
     "encode_sensitive",
     "load_memory",
     "save_memory",

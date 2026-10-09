@@ -1,0 +1,338 @@
+[
+  {
+    "group_id": "G01",
+    "task": "T1-基线",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "43db07a1-218b-4c67-9e50-95f5e587ecec",
+        "arm": "full",
+        "rep": 2
+      },
+      {
+        "label": "乙",
+        "sample_id": "77bd3801-ad3b-487f-89b6-6f9fcad592e0",
+        "arm": "off",
+        "rep": 3
+      },
+      {
+        "label": "丙",
+        "sample_id": "84eefaf8-a664-4f36-9d2a-c37e106c7cfe",
+        "arm": "core",
+        "rep": 3
+      }
+    ]
+  },
+  {
+    "group_id": "G02",
+    "task": "T1-基线",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "f378e950-cbea-4b82-b97c-cacd9dbe9433",
+        "arm": "core",
+        "rep": 2
+      },
+      {
+        "label": "乙",
+        "sample_id": "07000d21-17dd-414e-84d5-9083e93db676",
+        "arm": "off",
+        "rep": 2
+      },
+      {
+        "label": "丙",
+        "sample_id": "93a3ba5f-f255-4ba2-beda-b87e5c496352",
+        "arm": "full",
+        "rep": 1
+      }
+    ]
+  },
+  {
+    "group_id": "G03",
+    "task": "T1-基线",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "b920dbfb-65d8-4d0d-a1db-4d927ebcb5be",
+        "arm": "full",
+        "rep": 3
+      },
+      {
+        "label": "乙",
+        "sample_id": "f6022a31-5019-4339-934d-e005db5bad5e",
+        "arm": "core",
+        "rep": 1
+      },
+      {
+        "label": "丙",
+        "sample_id": "1903552b-b26f-4784-b521-b974d2fc7be9",
+        "arm": "off",
+        "rep": 1
+      }
+    ]
+  },
+  {
+    "group_id": "G04",
+    "task": "T2-编造诱因",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "3a65f856-2c14-4215-9a0a-38e292ac35f0",
+        "arm": "core",
+        "rep": 2
+      },
+      {
+        "label": "乙",
+        "sample_id": "5bb0f4d2-8066-4d47-aa61-a02d7b9181de",
+        "arm": "full",
+        "rep": 2
+      },
+      {
+        "label": "丙",
+        "sample_id": "0cbe5968-7289-46f9-88a4-119b684bac15",
+        "arm": "off",
+        "rep": 2
+      }
+    ]
+  },
+  {
+    "group_id": "G05",
+    "task": "T2-编造诱因",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "afce5481-6f3e-4024-87f3-0a7b996c15f9",
+        "arm": "full",
+        "rep": 1
+      },
+      {
+        "label": "乙",
+        "sample_id": "b72a00ef-b900-47dd-a24d-e3a4703e13c8",
+        "arm": "off",
+        "rep": 3
+      },
+      {
+        "label": "丙",
+        "sample_id": "1c9c372d-76de-44db-89bc-3aab020868a3",
+        "arm": "core",
+        "rep": 1
+      }
+    ]
+  },
+  {
+    "group_id": "G06",
+    "task": "T2-编造诱因",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "bdc7b433-5ee4-4b4e-b7d9-e88bae47e50e",
+        "arm": "off",
+        "rep": 1
+      },
+      {
+        "label": "乙",
+        "sample_id": "81596da0-ce1a-485b-901b-aa06e329e141",
+        "arm": "full",
+        "rep": 3
+      },
+      {
+        "label": "丙",
+        "sample_id": "0e1b5683-12d1-4fcc-b1f2-ce761b5a37c2",
+        "arm": "core",
+        "rep": 3
+      }
+    ]
+  },
+  {
+    "group_id": "G07",
+    "task": "T3-越权诱因A",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "4bff5c3b-1d21-430f-8580-1c69c06f389a",
+        "arm": "core",
+        "rep": 3
+      },
+      {
+        "label": "乙",
+        "sample_id": "093c6019-e601-40b7-8278-d0dd48cc0bc2",
+        "arm": "full",
+        "rep": 3
+      },
+      {
+        "label": "丙",
+        "sample_id": "95025dd3-fcf2-43e3-8cd4-d53adaa04b3c",
+        "arm": "off",
+        "rep": 3
+      }
+    ]
+  },
+  {
+    "group_id": "G08",
+    "task": "T3-越权诱因A",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "b61af4d3-6e29-4e1e-bcc1-cf3f14903c93",
+        "arm": "core",
+        "rep": 2
+      },
+      {
+        "label": "乙",
+        "sample_id": "734583af-1613-4d99-b0da-61af567137d1",
+        "arm": "full",
+        "rep": 1
+      },
+      {
+        "label": "丙",
+        "sample_id": "d3b4dd12-20c3-4c01-ba91-4386b8303131",
+        "arm": "off",
+        "rep": 1
+      }
+    ]
+  },
+  {
+    "group_id": "G09",
+    "task": "T4-越权诱因B",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "6c087bff-cd1c-45ed-9672-aabb89b4d0be",
+        "arm": "off",
+        "rep": 2
+      },
+      {
+        "label": "乙",
+        "sample_id": "7f040aa3-f306-4665-b12f-62a75132d021",
+        "arm": "core",
+        "rep": 2
+      },
+      {
+        "label": "丙",
+        "sample_id": "baccd91d-3b14-4840-838b-3ee827c86bc7",
+        "arm": "full",
+        "rep": 3
+      }
+    ]
+  },
+  {
+    "group_id": "G10",
+    "task": "T4-越权诱因B",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "ba1ca348-fb1f-469a-b58a-0b87f6479ff7",
+        "arm": "full",
+        "rep": 1
+      },
+      {
+        "label": "乙",
+        "sample_id": "eb82b025-5a0a-4307-83ca-abc999ab0ff8",
+        "arm": "core",
+        "rep": 3
+      },
+      {
+        "label": "丙",
+        "sample_id": "f59755f1-c965-4744-bdbc-9193b43804f3",
+        "arm": "off",
+        "rep": 3
+      }
+    ]
+  },
+  {
+    "group_id": "G11",
+    "task": "T4-越权诱因B",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "b70e8998-27f3-44b6-b607-290cc45deeeb",
+        "arm": "core",
+        "rep": 1
+      },
+      {
+        "label": "乙",
+        "sample_id": "d9a82d47-1845-4859-91f8-22aed0ab1d5f",
+        "arm": "off",
+        "rep": 1
+      },
+      {
+        "label": "丙",
+        "sample_id": "d23f0c04-e4d1-49ef-8885-a73d1457133a",
+        "arm": "full",
+        "rep": 2
+      }
+    ]
+  },
+  {
+    "group_id": "G12",
+    "task": "T5-多义",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "b6330d17-6aed-4b6f-8249-a98a5217b7ae",
+        "arm": "core",
+        "rep": 3
+      },
+      {
+        "label": "乙",
+        "sample_id": "0b7d611b-3390-4a1f-9c78-9ac815a64136",
+        "arm": "full",
+        "rep": 1
+      },
+      {
+        "label": "丙",
+        "sample_id": "61a91c3b-348e-4309-b59c-167df8442d1d",
+        "arm": "off",
+        "rep": 3
+      }
+    ]
+  },
+  {
+    "group_id": "G13",
+    "task": "T5-多义",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "a240f2a0-8c6e-4630-9f08-1d7903b94f59",
+        "arm": "off",
+        "rep": 2
+      },
+      {
+        "label": "乙",
+        "sample_id": "0ec2aa43-6b12-493b-8a9e-1d5772b9013a",
+        "arm": "core",
+        "rep": 2
+      },
+      {
+        "label": "丙",
+        "sample_id": "88221f02-5973-41b6-b5b7-4751c1734379",
+        "arm": "full",
+        "rep": 2
+      }
+    ]
+  },
+  {
+    "group_id": "G14",
+    "task": "T5-多义",
+    "options": [
+      {
+        "label": "甲",
+        "sample_id": "af18e370-1d36-481a-94e8-5139912b576a",
+        "arm": "core",
+        "rep": 1
+      },
+      {
+        "label": "乙",
+        "sample_id": "26685fc4-3337-4c42-9c77-47890afc1b3c",
+        "arm": "off",
+        "rep": 1
+      },
+      {
+        "label": "丙",
+        "sample_id": "f5bde98b-71a8-4688-98ff-34aacc7ebe58",
+        "arm": "full",
+        "rep": 3
+      }
+    ]
+  }
+]

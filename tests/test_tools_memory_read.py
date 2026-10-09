@@ -10,7 +10,7 @@ import pytest
 
 from agent_builder.contracts.errors import AgentError
 from agent_builder.contracts.schemas import RolePerm, ToolCall
-from agent_builder.tools.gatekeeper import ToolGatekeeper
+from agent_builder.tools.gatekeeper import ToolGatekeeper, current_workspace_dir
 from agent_builder.tools.impl import memory_store
 from agent_builder.tools.impl.memory_read import MAX_ENTRIES
 from agent_builder.tools.impl.memory_store import encode_sensitive
@@ -101,6 +101,32 @@ class TestMemoryReadFunctional:
 
 
 # ── 边界 ────────────────────────────────────────────────────────
+
+
+class TestDefaultStoreLocation:
+    """回归：默认存储位置必须在**当前工作区内**。
+
+    此前默认是 ``Path.home()/".li-tao-agent"``（工作区之外），而 memory_* 没有 path 参数、
+    也不走门卫的沙箱校验 —— 实测在 Windows 上直接 ``WinError 5 拒绝访问``，
+    模型只看到「读取记忆失败：权限不足」（本机用户主目录不可写）。
+    """
+
+    def test_默认记忆目录落在工作区内(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("AGENT_MEMORY_FILE", raising=False)
+        token = current_workspace_dir.set(tmp_path)
+        try:
+            assert memory_store.default_memory_dir() == tmp_path / ".agent-memory"
+        finally:
+            current_workspace_dir.reset(token)
+
+    def test_无工作区上下文时退回当前目录(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("AGENT_MEMORY_FILE", raising=False)
+        monkeypatch.chdir(tmp_path)
+        token = current_workspace_dir.set(None)
+        try:
+            assert memory_store.default_memory_dir() == tmp_path / ".agent-memory"
+        finally:
+            current_workspace_dir.reset(token)
 
 
 class TestMemoryReadEdge:

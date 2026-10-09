@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Builder · 交接提示卡片原型</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1 class="topbar-title">Agent Builder · 交接提示卡片</h1>
+  <p class="topbar-sub">
+    纯静态原型（mock 数据 + 桩接口，无真实后端）· 颜色与组件复刻 <code>frontend/styles.css</code> 的设计 token
+  </p>
+</header>
+
+<section class="console" aria-label="原型控制台">
+  <div class="console-row">
+    <span class="console-label">后端判定场景</span>
+    <div class="seg" id="scenarioBar" role="group" aria-label="后端判定场景">
+      <button class="seg-btn" type="button" data-scenario="strong" aria-pressed="true">强烈建议</button>
+      <button class="seg-btn" type="button" data-scenario="suggest" aria-pressed="false">建议</button>
+      <button class="seg-btn" type="button" data-scenario="none" aria-pressed="false">暂不需要</button>
+    </div>
+  </div>
+
+  <div class="console-row">
+    <span class="console-label">任务状态</span>
+    <div class="seg" id="statusBar" role="group" aria-label="任务状态">
+      <button class="seg-btn" type="button" data-status="executing" aria-pressed="true">executing</button>
+      <button class="seg-btn" type="button" data-status="delivered" aria-pressed="false">delivered</button>
+    </div>
+    <span class="console-hint">delivered 时后端判定「不打扰」（已闭环不必交接）</span>
+  </div>
+
+  <div class="console-row">
+    <label class="console-label" for="turnsSlider">对话轮次</label>
+    <input class="range" type="range" id="turnsSlider" min="0" max="12" step="1" value="7">
+    <output class="console-value" id="turnsValue">7</output>
+    <label class="console-label console-label-inline" for="promptsSlider">已提示次数</label>
+    <input class="range range-short" type="range" id="promptsSlider" min="0" max="3" step="1" value="0">
+    <output class="console-value" id="promptsValue">0</output>
+  </div>
+
+  <div class="console-row">
+    <label class="console-label" for="tokensSlider">累计 token</label>
+    <input class="range" type="range" id="tokensSlider" min="0" max="24000" step="200" value="13240">
+    <output class="console-value" id="tokensValue">13,240</output>
+    <label class="check">
+      <input type="checkbox" id="failToggle">
+      <span>模拟接口失败</span>
+    </label>
+  </div>
+
+  <div class="console-row">
+    <span class="console-label">主题</span>
+    <div class="seg" id="themeBar" role="group" aria-label="主题">
+      <button class="seg-btn" type="button" data-theme-mode="system" aria-pressed="true">跟随系统</button>
+      <button class="seg-btn" type="button" data-theme-mode="light" aria-pressed="false">浅色</button>
+      <button class="seg-btn" type="button" data-theme-mode="dark" aria-pressed="false">暗色</button>
+    </div>
+  </div>
+</section>
+
+<main class="chat-area">
+  <div class="chat-log">
+    <div class="msg-user">
+      <div class="bubble">给记忆管家加一个能力：对话超过 n 次时，检测是否需要建立交接提示来开启下一轮新对话。</div>
+    </div>
+
+    <div class="msg-agent">
+      <div class="bubble">已拆分为 7 个步骤，正在执行。其中 web_fetch 步骤的来源链接失效，已重试 2 次。</div>
+    </div>
+
+    <div class="tool-card">
+      <div class="tool-card-header">
+        <span class="tool-card-title">step-004 · web_fetch</span>
+        <span class="tool-status failed">failed</span>
+      </div>
+      <div class="tool-card-detail">来源链接失效，重试 2 次仍失败（重试次数计入 rework_count）</div>
+    </div>
+
+    <!-- 交接提示卡片挂载点：内容由 api.fetchHandover() 返回的结构化交接对象渲染。
+         该卡片**不写入 transcript**（刷新即消失），「已查看 / 已忽略」由后端 ack 记录。 -->
+    <div id="handoverSlot" aria-live="polite"></div>
+  </div>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="mock.js"></script>
+<script src="api.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

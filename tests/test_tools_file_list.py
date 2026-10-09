@@ -76,7 +76,26 @@ class TestFileListFunctional:
         sub.mkdir()
         (sub / "child.txt").write_text("child", encoding="utf-8")
         call = registry.execute(gatekeeper, _make_call("operator", sub))
-        assert call.result == "[FILE] child.txt (5 bytes)"
+        # 条目带被列目录的前缀：模型才能把这个名字**原样**喂给 file_read。
+        assert call.result == "[FILE] parent/child.txt (5 bytes)"
+
+    def test_条目带目录前缀(self, gatekeeper, workspace):
+        """裸文件名会误导模型：它知道文件在 agents/ 里，却会去读 ``path="research_agent.py"``
+
+        （被解析成工作区根）→「文件不存在」→ 反复重试（实测连撞 2–5 次直到空转终止）。
+        """
+        sub = workspace / "agents"
+        sub.mkdir()
+        (sub / "research_agent.py").write_text("x", encoding="utf-8")
+
+        call = registry.execute(gatekeeper, _make_call("operator", sub))
+
+        assert call.result == "[FILE] agents/research_agent.py (1 bytes)"
+
+    def test_列工作区根时不加前缀(self, gatekeeper, workspace):
+        (workspace / "top.txt").write_text("t", encoding="utf-8")
+        call = registry.execute(gatekeeper, _make_call("operator", workspace))
+        assert call.result == "[FILE] top.txt (1 bytes)"
 
 
 # ── 边界 ────────────────────────────────────────────────────────
@@ -84,11 +103,12 @@ class TestFileListFunctional:
 
 class TestFileListEdge:
     def test_missing_path_arg(self, gatekeeper):
-        # args 不含 path → 门卫 _check_sandbox_path 取到空串 → E_PERMISSION
+        # 缺参数 → E_VALIDATION（不是 E_PERMISSION），见 test_tools_file_read.py 同名用例。
         call = ToolCall(audit_id="a-e1", role="operator", tool="file_list", args={})
         with pytest.raises(AgentError) as exc_info:
             registry.execute(gatekeeper, call)
-        assert exc_info.value.error_name == "E_PERMISSION"
+        assert exc_info.value.error_name == "E_VALIDATION"
+        assert "缺少 path" in exc_info.value.info.message
 
     def test_empty_path_string(self, gatekeeper):
         call = ToolCall(
@@ -96,7 +116,7 @@ class TestFileListEdge:
         )
         with pytest.raises(AgentError) as exc_info:
             registry.execute(gatekeeper, call)
-        assert exc_info.value.error_name == "E_PERMISSION"
+        assert exc_info.value.error_name == "E_VALIDATION"
 
     def test_nonexistent_path(self, gatekeeper, workspace):
         call = _make_call("operator", workspace / "nope")

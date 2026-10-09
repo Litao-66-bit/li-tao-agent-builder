@@ -12,6 +12,7 @@ from agent_builder.contracts.schemas import Step
 from agent_builder.roles.test_runner import (
     MAX_RETRIES,
     TEST_ACTIONS,
+    UNVERIFIABLE_MSG,
     TestRunner,
 )
 from agent_builder.tools.permissions import DEFAULT_ROLE_PERMS
@@ -101,11 +102,12 @@ class TestRunnerFunctional:
             call_count += 1
             if call_count == 1:
                 raise OSError("沙箱不可用")
-            return "ok"
+            return "1 passed in 0.01s"
 
         result = r.execute(step, executor_fn=fn)
         assert call_count == 2  # 初始 + 重试
         assert result.status == "done"
+        assert result.passed == 1
 
     def test_env_exception_max_retries(self):
         """环境异常重试仍失败 → env_failure。"""
@@ -171,11 +173,11 @@ class TestRunnerFunctional:
 
 class TestRunnerEdge:
     def test_empty_cases(self):
-        """无测试用例 → 空清单。"""
+        """既没有真实输出计数、也没有显式用例 → 无法核对（不默认 done）。"""
         r = _make_runner()
         step = _make_step("test_run", {})
-        result = r.execute(step, executor_fn=lambda s: "ok")
-        assert result.status == "done"
+        result = r.execute(step, executor_fn=lambda s: "")
+        assert result.status == "env_failure"
         assert result.cases == []
         assert result.passed == 0
 
@@ -193,6 +195,140 @@ class TestRunnerEdge:
         result = r.execute(step, executor_fn=fn)
         assert call_count == 1  # max_retries=0 → 只执行 1 次
         assert result.status == "env_failure"
+
+
+# ── 真实输出为准（实机 bug：test_run 永远报「测试通过 0 项」） ────
+
+
+class TestRunnerRealOutput:
+    """计数必须来自工具真实输出；拿不到就判「无法核对」，绝不默认成功。"""
+
+    def test_真实输出解析为计数(self):
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests"})
+        result = r.execute(step, executor_fn=lambda s: "39 passed in 0.52s")
+        assert result.status == "done"
+        assert result.passed == 39
+        assert result.failed == 0
+
+    def test_真实输出有失败(self):
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests"})
+        result = r.execute(
+            step, executor_fn=lambda s: "1 failed, 2 passed in 0.10s"
+        )
+        assert result.status == "failed"
+        assert result.passed == 2
+        assert result.failed == 1
+
+    def test_真实输出有错误(self):
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests"})
+        result = r.execute(step, executor_fn=lambda s: "3 passed, 1 error in 0.10s")
+        assert result.status == "failed"
+        assert result.passed == 3
+        assert result.error == 1
+
+    def test_真实输出优先于自填用例(self):
+        """口径：真实输出是唯一事实来源，不被 inputs 里自填的用例覆盖。"""
+        r = _make_runner()
+        step = _make_step("test_run", {
+            "test_cases": [{"name": f"t{i}", "status": "passed"} for i in range(5)],
+        })
+        result = r.execute(step, executor_fn=lambda s: "2 passed in 0.01s")
+        assert result.passed == 2
+        assert result.cases == []
+
+    def test_真实失败时带出用例与原因(self):
+        """失败必须让模型看到「哪条用例、为什么」——否则调用链只剩一句通用串。"""
+        out = (
+            "tests/test_x.py::test_a PASSED [ 50%]\n"
+            "tests/test_x.py::test_b FAILED [100%]\n"
+            "========================= short test summary info ==========================\n"
+            "FAILED tests/test_x.py::test_b - ModuleNotFoundError: No module named 'foo'\n"
+            "========================= 1 failed, 1 passed in 0.53s ======================\n"
+        )
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests/test_x.py"})
+        result = r.execute(step, executor_fn=lambda s: out)
+        assert result.status == "failed"
+        assert result.failed == 1
+        assert "test_b" in result.error_msg
+        assert "ModuleNotFoundError" in result.error_msg
+
+    def test_集合期报错时带出真因(self):
+        """汇总行不带原因（import 失败等）→ 取 pytest 的 "E   ..." 行，否则模型改不动。"""
+        out = (
+            "============================= ERRORS ==============================\n"
+            "_ ERROR collecting tests/test_x.py _\n"
+            "ImportError while importing test module 'tests/test_x.py'.\n"
+            "E   ModuleNotFoundError: No module named 'research_paper_agent'\n"
+            "========================= 1 error in 0.11s ========================\n"
+        )
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests/test_x.py"})
+        result = r.execute(step, executor_fn=lambda s: out)
+        assert result.status == "failed"
+        assert "ModuleNotFoundError" in result.error_msg
+
+    def test_全部通过时没有错误信息(self):
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests"})
+        result = r.execute(step, executor_fn=lambda s: "2 passed in 0.01s")
+        assert result.status == "done"
+        assert result.error_msg is None
+
+    def test_失败行最多带出5条(self):
+        """够定位即可，不把整段输出倒给模型。"""
+        out = (
+            "\n".join(
+                f"FAILED tests/test_x.py::test_{i} - AssertionError" for i in range(9)
+            )
+            + "\n9 failed in 0.10s\n"
+        )
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests/test_x.py"})
+        result = r.execute(step, executor_fn=lambda s: out)
+        assert result.failed == 9
+        assert result.error_msg.count("→") == 5
+        assert "test_8" not in result.error_msg
+
+    def test_一组都没跑到判环境失败(self):
+        """pytest 明确 no tests ran → 不能当成「测试通过」。"""
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests/nope.py"})
+        result = r.execute(step, executor_fn=lambda s: "no tests ran in 0.01s")
+        assert result.status == "env_failure"
+        assert result.error_msg == UNVERIFIABLE_MSG
+
+    def test_拿不到可核对结果判环境失败(self):
+        """输出里没有任何计数、也没有显式用例 → 无法核对（绝不默认 done）。"""
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests"})
+        result = r.execute(step, executor_fn=lambda s: "ERROR: 目录不存在")
+        assert result.status == "env_failure"
+        assert result.error_msg == UNVERIFIABLE_MSG
+
+    def test_输出被截断时降级统计明细标记(self):
+        """汇总行随截断丢失 → 退化为数 -v 明细行的 PASSED/FAILED/ERROR。"""
+        truncated = (
+            "tests/test_a.py::test_1 PASSED [ 50%]\n"
+            "tests/test_b.py::test_2 PASSED [100%]\n"
+            "…[已截断，原文 90000 字符]"
+        )
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests"})
+        result = r.execute(step, executor_fn=lambda s: truncated)
+        assert result.status == "done"
+        assert result.passed == 2
+
+    def test_截断说明行不干扰汇总行扫描(self):
+        """截断标记本身不含计数，不应让它抢走汇总行。"""
+        out = "3 passed in 0.05s\n…[已截断，原文 60000 字符]"
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests"})
+        result = r.execute(step, executor_fn=lambda s: out)
+        assert result.passed == 3
 
 
 # ── 授权 ────────────────────────────────────────────────────────

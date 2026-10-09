@@ -64,6 +64,54 @@ class TestDecomposerFunctional:
         assert "s1" in result.steps
         assert "s3" in result.steps
 
+    def test_去重容忍列表型输入(self):
+        """回归：inputs 含 list/dict（如文件清单）时不得因不可哈希而崩溃（曾致 /plan 500）。"""
+        d = _make_decomposer()
+        raw = [
+            {"id": "s1", "action": "file_write", "inputs": {"files": ["a.md", "b.md"]}},
+            {"id": "s2", "action": "file_write", "inputs": {"files": ["a.md", "b.md"]}},  # 重复
+            {"id": "s3", "action": "file_write", "inputs": {"files": ["c.md"], "meta": {"k": 1}}},
+        ]
+        result = d.decompose("t-001", "需求", raw_steps=raw)
+        assert len(result.steps) == 2  # s2 被合并，且未抛 TypeError
+        assert "s1" in result.steps
+        assert "s3" in result.steps
+
+    def test_去重重写悬空依赖(self):
+        """回归：被去重步骤的 id 被他人引用时，应重写为保留步骤的 id（曾致 /plan 409）。"""
+        d = _make_decomposer()
+        raw = [
+            {"id": "step-001", "action": "web_search", "inputs": {"q": "x"}, "depends_on": []},
+            {"id": "step-002", "action": "web_search", "inputs": {"q": "x"}, "depends_on": []},  # 重复
+            {"id": "step-003", "action": "file_write", "inputs": {"p": "/a"}, "depends_on": ["step-002"]},
+        ]
+        result = d.decompose("t-001", "需求", raw_steps=raw)
+        assert set(result.steps) == {"step-001", "step-003"}
+        assert result.steps["step-003"].depends_on == ["step-001"]  # 悬空被重写到保留步骤
+        assert result.pending_questions == []  # 不再产生悬空歧义
+
+    def test_去重合并同目标的重复依赖(self):
+        """重写后若多个依赖指向同一保留步骤，应去重。"""
+        d = _make_decomposer()
+        raw = [
+            {"id": "s1", "action": "a", "inputs": {}, "depends_on": []},
+            {"id": "s2", "action": "a", "inputs": {}, "depends_on": []},  # 与 s1 重复
+            {"id": "s3", "action": "b", "inputs": {}, "depends_on": ["s1", "s2"]},
+        ]
+        result = d.decompose("t-001", "需求", raw_steps=raw)
+        assert result.steps["s3"].depends_on == ["s1"]
+
+    def test_去重消除自依赖(self):
+        """被去重步骤映射回自身时应剔除，不留自依赖。"""
+        d = _make_decomposer()
+        raw = [
+            {"id": "s1", "action": "a", "inputs": {}, "depends_on": ["s2"]},
+            {"id": "s2", "action": "a", "inputs": {}, "depends_on": []},  # 与 s1 重复
+        ]
+        result = d.decompose("t-001", "需求", raw_steps=raw)
+        assert set(result.steps) == {"s1"}
+        assert result.steps["s1"].depends_on == []
+
     def test_dependency_grouping(self):
         """拓扑排序分组：无依赖→第一组，依赖第一组→第二组。"""
         d = _make_decomposer()

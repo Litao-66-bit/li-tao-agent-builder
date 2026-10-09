@@ -63,6 +63,53 @@ class TestConductorFullCycle:
         assert c.task_state.status == TaskStatus.DELIVERED
         assert c.is_terminal is True
 
+    def test_每次转换刷新updated_at(self):
+        """``updated_at`` 必须随状态转换推进（任务耗时与任务列表排序都依赖它）。
+
+        回归：此前它只在创建时由 ``default_factory`` 赋值、**再无写入点** →
+        ① 前端「已深度思考（用时 N 秒）」恒为 0 秒；
+        ② ``list_summaries`` 按 ``updated_at`` 倒序 → 排序恒等于创建顺序，刚跑完的任务不置顶。
+        """
+        c = _make_conductor()
+        created_at = c.task_state.created_at
+        created_updated = c.task_state.updated_at
+
+        c.receive_request("t-001", "需求")
+        first = c.task_state.updated_at
+        assert first != created_updated  # 转换真的写了新时间戳
+        assert c.task_state.created_at == created_at  # 创建时间不被改写
+
+        c.handle_plan_ready()
+        second = c.task_state.updated_at
+        assert second >= first  # 单调不减
+        c.handle_plan_accepted()
+        assert c.task_state.updated_at >= second
+
+    def test_touch只刷新时间戳不改状态(self):
+        """状态**没有转换**时（agentic 非收敛停下）也要能推进 updated_at。
+
+        否则前端「已深度思考（用时 N 秒）」里的 N 恒为 0 —— 实测踩到过。
+        """
+        c = _make_conductor()
+        c.receive_request("t-001", "需求")
+        before = c.task_state.updated_at
+        status = c.task_state.status
+        stage = c.task_state.current_stage
+
+        c.touch()
+
+        assert c.task_state.updated_at != before
+        assert c.task_state.status == status  # 状态不变
+        assert c.task_state.current_stage == stage
+
+    def test_失败转换不污染updated_at(self):
+        """非法转换（抛 E_INTERNAL）不应改动时间戳 —— 状态都没变。"""
+        c = _make_conductor()
+        before = c.task_state.updated_at
+        with pytest.raises(AgentError):
+            c.handle_plan_ready()  # RECEIVED + PLAN_READY 未定义
+        assert c.task_state.updated_at == before
+
     def test_plan_rejected_back_to_planning(self):
         """用户拒绝计划 → 回到规划。"""
         c = _make_conductor()
@@ -195,6 +242,25 @@ class TestConductorInterrupt:
         assert c.task_state.status == TaskStatus.FAILED
         assert c.is_terminal is True
 
+    def test_reject_from_interrupted_back_to_planning(self):
+        """暂停（到点暂停 / 手动中断）后「改计划」→ 回 PLANNING，并清掉中断快照。"""
+        c = _make_conductor()
+        c.receive_request("t-001", "需求")
+        c.handle_plan_ready()
+        c.handle_plan_accepted()
+        c.handle_interrupt("high_risk_pending")
+        assert c.task_state.status == TaskStatus.INTERRUPTED
+
+        c.handle_plan_rejected()
+        assert c.task_state.status == TaskStatus.PLANNING
+        assert c.task_state.current_stage == "planning"
+        # 不再残留过期的 resume_point（与 handle_resume 同口径）。
+        assert c.task_state.interrupted is None
+
+        # 退回规划后可正常重新规划。
+        c.handle_plan_ready()
+        assert c.task_state.status == TaskStatus.AWAITING_CONFIRM
+
 
 # ── 边界 ────────────────────────────────────────────────────────
 
@@ -262,7 +328,7 @@ class TestConductorPermissions:
         assert "conductor" in DEFAULT_ROLE_PERMS
 
     def test_allowed_tools(self):
-        """conductor 只有 6 个低风险工具。"""
+        """conductor 只有 8 个低风险工具（含评审会收敛两个）。"""
         perm = DEFAULT_ROLE_PERMS["conductor"]
         assert set(perm.allowed_tools) == {
             "plan_validate",
@@ -271,6 +337,8 @@ class TestConductorPermissions:
             "audit_log",
             "memory_read",
             "config_read",
+            "council_check_opinion",
+            "council_build_minutes",
         }
 
     def test_no_high_risk(self):

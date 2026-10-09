@@ -90,7 +90,8 @@ class TestFileWriteEdge:
         )
         with pytest.raises(AgentError) as exc_info:
             registry.execute(gatekeeper, call)
-        assert exc_info.value.error_name == "E_PERMISSION"
+        # 缺参数 → E_VALIDATION（不是 E_PERMISSION）。
+        assert exc_info.value.error_name == "E_VALIDATION"
 
     def test_empty_content_rejected(self, gatekeeper, workspace):
         # content=None 会在实现层报 E_VALIDATION，但 args 里 content 必填
@@ -113,6 +114,9 @@ class TestFileWriteEdge:
             )
         assert exc_info.value.error_name == "E_VALIDATION"
         assert "已存在" in exc_info.value.info.message
+        # 错误信息给出可执行的修复提示，且为确定性失败（不重试）
+        assert "overwrite=true" in exc_info.value.info.message
+        assert exc_info.value.retryable is False
         # 原文件未被覆盖
         assert target.read_text(encoding="utf-8") == "keep"
 
@@ -129,8 +133,95 @@ class TestFileWriteEdge:
         assert "超长" in exc_info.value.info.message
 
 
-# ── 安全（审批门 + 沙箱）───────────────────────────────────────────
+# ── 占位符护栏（防「占位覆盖」写坏已有文件）────────────────────────
 
+
+class TestFileWritePlaceholderGuard:
+    """实测（用户任务复现 run-2 / run-3）：模型两次在「重写实现」时发出
+    ``content="PLACEHOLDER"`` 的覆盖写，把上一轮**已经通过真实运行验证**的实现
+    整个抹掉，随后那轮决策又解析失败 → 整个任务死掉。这是破坏性且可确定性防住的事故。"""
+
+    def test_占位符覆盖被拒且原文件不被改动(self, gatekeeper, workspace):
+        target = workspace / "agent.py"
+        target.write_text("class Real:\n    pass\n", encoding="utf-8")
+        call = _make_call("operator", target, "PLACEHOLDER", overwrite=True, approved=True)
+
+        with pytest.raises(AgentError) as exc_info:
+            registry.execute(gatekeeper, call)
+
+        assert exc_info.value.error_name == "E_VALIDATION"
+        assert "占位符" in exc_info.value.info.message
+        # 关键：原文件必须原封不动（护栏的全部意义就在这里）
+        assert target.read_text(encoding="utf-8") == "class Real:\n    pass\n"
+
+    @pytest.mark.parametrize("bad", ["TODO", "todo", "...", "…", "待补充", "TBD", "  PLACEHOLDER  "])
+    def test_各种占位符都被拒且不落盘(self, gatekeeper, workspace, bad):
+        target = workspace / "case.py"
+        call = _make_call("operator", target, bad, approved=True)
+
+        with pytest.raises(AgentError):
+            registry.execute(gatekeeper, call)
+
+        assert not target.exists()  # 新文件也不该被写出来
+
+    @pytest.mark.parametrize(
+        "ok",
+        ["x = 1", "class A:\n    pass", "# 这里用 PLACEHOLDER 作为示例说明占位符写法"],
+    )
+    def test_正常内容不受影响(self, gatekeeper, workspace, ok):
+        target = workspace / "case.py"
+        call = _make_call("operator", target, ok, approved=True)
+
+        result = registry.execute(gatekeeper, call).result
+
+        assert "wrote" in result
+        assert target.read_text(encoding="utf-8") == ok
+
+
+# ── 写完即回灌符号轮廓（模型"记住"自己的接口）────────────────────
+
+
+class TestFileWriteOutline:
+    """实测：模型写完实现后写测试时，会按**想象**的 API 写（``Plan`` vs ``ResearchPlan``、
+    ``add_source`` vs ``collect_sources``、``rank_papers(topic=)`` vs ``keywords``），
+    自己写的测试和自己的实现自相矛盾。写完必须把**内容的符号轮廓**随返回值带回。"""
+
+    def test_写完_py_返回符号轮廓(self, gatekeeper, workspace):
+        target = workspace / "agent.py"
+        code = "class PaperAgent:\n    def rank_papers(self, keywords):\n        return keywords\n"
+        call = _make_call("operator", target, code, approved=True)
+
+        result = registry.execute(gatekeeper, call).result
+
+        assert result.startswith(f"wrote {target}")
+        assert "符号轮廓" in result
+        assert "class PaperAgent" in result
+        assert "def rank_papers" in result
+
+    def test_非_py_文件不附轮廓(self, gatekeeper, workspace):
+        target = workspace / "notes.md"
+        call = _make_call("operator", target, "# 标题\nclass 不是代码\n", approved=True)
+
+        result = registry.execute(gatekeeper, call).result
+
+        assert "符号轮廓" not in result
+
+    def test_写盘内容逐字节一致不做换行翻译(self, gatekeeper, workspace):
+        """``newline=""``：写盘内容必须与给的内容**逐字节**一致。
+
+        否则 Windows 下 `\\n` 会被翻成 CRLF，而 ``file_read`` 读回来是 LF ——
+        模型照读到的文本构造 ``file_edit`` 的 old_string 时永远匹配不上
+        （实测：473 行 CRLF 文件上 4 次编辑全部「找不到 old_string」）。
+        """
+        target = workspace / "x.py"
+        call = _make_call("operator", target, "a = 1\nb = 2\n", approved=True)
+
+        registry.execute(gatekeeper, call)
+
+        assert target.read_bytes() == b"a = 1\nb = 2\n"
+
+
+# ── 安全（审批门 + 沙箱）───────────────────────────────────────────
 
 class TestFileWriteSecurity:
     def test_unapproved_rejected(self, gatekeeper, workspace):

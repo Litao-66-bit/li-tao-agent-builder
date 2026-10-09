@@ -184,6 +184,7 @@ class TestDocWorkerPermissions:
         assert set(perm.allowed_tools) == {
             "file_read",
             "file_write",
+            "file_edit",
             "web_fetch",
             "citation_check",
             "memory_read",
@@ -193,6 +194,7 @@ class TestDocWorkerPermissions:
     def test_file_write_is_high_risk(self):
         perm = DEFAULT_ROLE_PERMS["doc_worker"]
         assert "file_write" in perm.high_risk_tools
+        assert "file_edit" in perm.high_risk_tools
 
     def test_no_unauthorized_tools(self):
         """doc_worker 无代码/提交/回滚工具。"""
@@ -208,6 +210,7 @@ class TestDocWorkerConstants:
     def test_doc_actions_nonempty(self):
         assert len(DOC_ACTIONS) > 0
         assert "file_write" in DOC_ACTIONS
+        assert "file_edit" in DOC_ACTIONS
         assert "web_fetch" in DOC_ACTIONS
 
     def test_doc_actions_excludes_non_doc(self):

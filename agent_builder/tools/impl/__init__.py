@@ -7,8 +7,12 @@ from agent_builder.tools.impl import (
     citation_check,  # noqa: F401  导入触发注册
     code_search,  # noqa: F401  导入触发注册
     config_read,  # noqa: F401  导入触发注册
+    council_build_minutes,  # noqa: F401  导入触发注册
+    council_check_opinion,  # noqa: F401  导入触发注册
     data_query,  # noqa: F401  导入触发注册
     diff_preview,  # noqa: F401  导入触发注册
+    file_delete,  # noqa: F401  导入触发注册
+    file_edit,  # noqa: F401  导入触发注册
     file_list,  # noqa: F401  导入触发注册
     file_read,  # noqa: F401  导入触发注册
     file_write,  # noqa: F401  导入触发注册

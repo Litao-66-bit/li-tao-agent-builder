@@ -21,6 +21,14 @@ class Step(BaseModel):
 
     id: str = Field(description="步骤唯一 ID，如 step-001")
     action: str = Field(description="动作类型，如 web_search / file_write / code_gen")
+    title: str = Field(
+        default="",
+        description="人读标题（中文动作名，如「写入文件」）；供前端直接展示，不再暴露英文 action",
+    )
+    description: str = Field(
+        default="",
+        description="人读描述（动作 + 关键参数人话，如「写入文件（文件：a.md）」）",
+    )
     inputs: dict[str, Any] = Field(default_factory=dict)
     depends_on: list[str] = Field(default_factory=list)
     status: str = "pending"  # pending | running | done | failed | skipped

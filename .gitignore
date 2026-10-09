@@ -29,3 +29,20 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# 项目注册表（含本机绝对路径，绝不入库）
+data/projects.json
+data/*.json.tmp
+
+# 运行时状态（记忆 / 审计，落在当前工作区内）
+.agent-memory/
+.agent-audit/
+.agent-tmp/
+
+# DSH 插件启用的沙箱与回滚备份（含本机绝对路径，绝不入库）
+.dsh-scratch/
+
+# 本地依赖目录（pip install --target .deps 的依赖树）与实测产物草稿目录
+# —— 都不是项目源码，推送时不该带上（ruff 的 exclude 里也排除了这两处）
+.deps/
+_sample_backup/

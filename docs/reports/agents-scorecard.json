@@ -1,0 +1,1230 @@
+{
+  "roles": [
+    {
+      "role": "auditor",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "config_read",
+        "file_read",
+        "memory_read",
+        "metric_collect"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "config_read",
+        "file_read",
+        "memory_read",
+        "metric_collect"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 15 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "21 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "code_worker",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "code_search",
+        "file_edit",
+        "file_list",
+        "file_read",
+        "file_write",
+        "memory_read",
+        "sandbox_run"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "code_search",
+        "file_edit",
+        "file_list",
+        "file_read",
+        "file_write",
+        "memory_read",
+        "sandbox_run"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "实授 8 个工具，写类均挂审批门"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 13 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "25 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "conductor",
+      "kind": "orchestrator",
+      "doc_tools": [
+        "approval_request",
+        "audit_log",
+        "change_notify",
+        "config_read",
+        "council_build_minutes",
+        "council_check_opinion",
+        "memory_read",
+        "plan_validate"
+      ],
+      "granted_tools": [
+        "approval_request",
+        "audit_log",
+        "change_notify",
+        "config_read",
+        "council_build_minutes",
+        "council_check_opinion",
+        "memory_read",
+        "plan_validate"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "降级出口与错误路径均符合契约"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "编排产物为结构化契约对象"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "24 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约声明不执行，无需注入执行器；无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "data_analyst",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "citation_check",
+        "data_query",
+        "file_read",
+        "memory_read",
+        "sandbox_run"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "citation_check",
+        "data_query",
+        "file_read",
+        "memory_read",
+        "sandbox_run"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 13 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "20 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "decomposer",
+      "kind": "orchestrator",
+      "doc_tools": [
+        "audit_log",
+        "config_read",
+        "memory_read"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "config_read",
+        "memory_read"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "降级出口与错误路径均符合契约"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "编排产物为结构化契约对象"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "24 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约声明不执行，无需注入执行器；无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "doc_worker",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "citation_check",
+        "file_edit",
+        "file_read",
+        "file_write",
+        "memory_read",
+        "web_fetch"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "citation_check",
+        "file_edit",
+        "file_read",
+        "file_write",
+        "memory_read",
+        "web_fetch"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "实授 7 个工具，写类均挂审批门"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 12 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "19 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "fact_checker",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "citation_check",
+        "code_search",
+        "file_read",
+        "memory_read",
+        "web_fetch"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "citation_check",
+        "code_search",
+        "file_read",
+        "memory_read",
+        "web_fetch"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 15 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "20 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "gatekeeper",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "git_commit",
+        "memory_read",
+        "rollback",
+        "sandbox_run",
+        "test_run"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "git_commit",
+        "memory_read",
+        "rollback",
+        "sandbox_run",
+        "test_run"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "实授 6 个工具，写类均挂审批门"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 12 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "21 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "historian",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "change_notify",
+        "file_read",
+        "git_log",
+        "memory_read",
+        "memory_write"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "change_notify",
+        "file_read",
+        "git_log",
+        "memory_read",
+        "memory_write"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 16 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "21 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "impact_analyzer",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "code_search",
+        "config_read",
+        "diff_preview",
+        "file_read",
+        "memory_read"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "code_search",
+        "config_read",
+        "diff_preview",
+        "file_read",
+        "memory_read"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 16 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "21 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "memory_keeper",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "memory_forget",
+        "memory_read",
+        "memory_write"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "memory_forget",
+        "memory_read",
+        "memory_write"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 13 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "25 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "memory_manager",
+      "kind": "permission_only",
+      "doc_tools": [
+        "memory_forget",
+        "memory_read",
+        "memory_write"
+      ],
+      "granted_tools": [
+        "memory_forget",
+        "memory_read",
+        "memory_write"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        }
+      ],
+      "total": 10,
+      "applicable_max": 10,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "operator",
+      "kind": "permission_only",
+      "doc_tools": [
+        "approval_request",
+        "audit_log",
+        "change_notify",
+        "citation_check",
+        "code_search",
+        "config_read",
+        "data_query",
+        "diff_preview",
+        "file_delete",
+        "file_edit",
+        "file_list",
+        "file_read",
+        "file_write",
+        "git_log",
+        "memory_read",
+        "metric_collect",
+        "plan_validate",
+        "sandbox_run",
+        "test_run",
+        "web_fetch",
+        "web_search"
+      ],
+      "granted_tools": [
+        "approval_request",
+        "audit_log",
+        "change_notify",
+        "citation_check",
+        "code_search",
+        "config_read",
+        "data_query",
+        "diff_preview",
+        "file_delete",
+        "file_edit",
+        "file_list",
+        "file_read",
+        "file_write",
+        "git_log",
+        "memory_read",
+        "metric_collect",
+        "plan_validate",
+        "sandbox_run",
+        "test_run",
+        "web_fetch",
+        "web_search"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "实授 21 个工具，写类均挂审批门"
+        }
+      ],
+      "total": 10,
+      "applicable_max": 10,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "proposer",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "config_read",
+        "diff_preview",
+        "file_read",
+        "memory_read",
+        "metric_collect"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "config_read",
+        "diff_preview",
+        "file_read",
+        "memory_read",
+        "metric_collect"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 15 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "19 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "router",
+      "kind": "orchestrator",
+      "doc_tools": [
+        "audit_log",
+        "config_read",
+        "metric_collect",
+        "plan_validate"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "config_read",
+        "metric_collect",
+        "plan_validate"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "降级出口与错误路径均符合契约"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "编排产物为结构化契约对象"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "22 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约声明不执行，无需注入执行器；无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "scheduler",
+      "kind": "orchestrator",
+      "doc_tools": [
+        "audit_log",
+        "config_read",
+        "memory_read",
+        "plan_validate"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "config_read",
+        "memory_read",
+        "plan_validate"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "降级出口与错误路径均符合契约"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "编排产物为结构化契约对象"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "21 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "契约声明不执行，无需注入执行器；无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "searcher",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "citation_check",
+        "memory_read",
+        "web_fetch",
+        "web_search"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "citation_check",
+        "memory_read",
+        "web_fetch",
+        "web_search"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 15 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "21 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "sub_architect",
+      "kind": "permission_only",
+      "doc_tools": [
+        "git_commit",
+        "git_log",
+        "rollback"
+      ],
+      "granted_tools": [
+        "git_commit",
+        "git_log",
+        "rollback"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "实授 3 个工具，写类均挂审批门"
+        }
+      ],
+      "total": 10,
+      "applicable_max": 10,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "summarizer",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "file_read",
+        "memory_read",
+        "memory_write"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "file_read",
+        "memory_read",
+        "memory_write"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 15 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "19 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    },
+    {
+      "role": "test_runner",
+      "kind": "executor",
+      "doc_tools": [
+        "audit_log",
+        "citation_check",
+        "code_search",
+        "file_read",
+        "memory_read",
+        "sandbox_run",
+        "test_run"
+      ],
+      "granted_tools": [
+        "audit_log",
+        "citation_check",
+        "code_search",
+        "file_read",
+        "memory_read",
+        "sandbox_run",
+        "test_run"
+      ],
+      "dimensions": [
+        {
+          "name": "契约符合度",
+          "score": 5,
+          "max_score": 5,
+          "note": "授权清单/边界声明/异常处理表三者齐备且与 permissions.py 一致"
+        },
+        {
+          "name": "权限最小化",
+          "score": 5,
+          "max_score": 5,
+          "note": "只读角色，无写类工具"
+        },
+        {
+          "name": "失败语义",
+          "score": 5,
+          "max_score": 5,
+          "note": "超时/权限不足/无来源/样本不足均有降级落点"
+        },
+        {
+          "name": "可观测性",
+          "score": 5,
+          "max_score": 5,
+          "note": "结构化字段 14 个"
+        },
+        {
+          "name": "测试覆盖",
+          "score": 5,
+          "max_score": 5,
+          "note": "32 个用例"
+        },
+        {
+          "name": "依赖清晰度",
+          "score": 5,
+          "max_score": 5,
+          "note": "只注入 executor_fn，无跨层依赖与隐式全局"
+        }
+      ],
+      "total": 30,
+      "applicable_max": 30,
+      "safety_flags": [],
+      "actions": [
+        "无"
+      ]
+    }
+  ],
+  "coverage_gaps": {
+    "文档有但无实现模块（未声明权限层）": [],
+    "权限有但无实现模块（未声明权限层）": [],
+    "权限有但文档无章节": [],
+    "权限无但文档有章节（外部实现）": [
+      "tool_guardian"
+    ],
+    "实现模块有但文档无章节": [],
+    "已声明的权限层角色（无独立模块，设计如此）": [
+      "memory_manager",
+      "operator",
+      "sub_architect"
+    ]
+  }
+}

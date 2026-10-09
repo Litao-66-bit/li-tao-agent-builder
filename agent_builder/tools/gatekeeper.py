@@ -9,19 +9,70 @@
 
 from __future__ import annotations
 
-import os
+import contextvars
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agent_builder.contracts.errors import permission_error
+from agent_builder.contracts.errors import permission_error, validation_error
 from agent_builder.contracts.schemas import RolePerm, ToolCall
 from agent_builder.tools.redact import redact_args
 from agent_builder.tools.url_guard import validate_url
 
 # 默认白名单目录：只有工作区内的路径可写（防路径穿越/越权写系统目录）。
-# 可用环境变量 AGENT_WORKSPACE_DIR 覆盖（CI / 生产按需指向真实工作区）。
-WORKSPACE_DIR = Path(os.environ.get("AGENT_WORKSPACE_DIR", "/workspace"))
+WORKSPACE_DIR = Path("/home/user/Doubao/chats/38443251841377538")
+
+# 「当前工作区」上下文：门卫用自己的 ``workspace_dir`` 校验，而**工具实现拿不到门卫实例**，
+# 只能通过它把相对路径解析到同一个基准（由 ``registry.execute`` 注入）。
+# 默认 None → 调用时退回进程 cwd（保持「不走门卫直接调实现」时的既有行为）。
+current_workspace_dir: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "tool_workspace_dir", default=None
+)
+
+# 工作区内可写临时目录的名字（隐藏目录：不进产物树、不进 lint、不进 git）。
+WORKSPACE_TEMP_DIRNAME = ".agent-tmp"
+
+
+def workspace_temp_dir() -> Path:
+    """当前工作区内的可写临时目录（不存在则创建）。"""
+    root = current_workspace_dir.get() or Path.cwd()
+    tmp = Path(root) / WORKSPACE_TEMP_DIRNAME
+    try:
+        tmp.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return Path(root)  # 建不出来就退回工作区根：至少是可写的
+    return tmp
+
+
+def workspace_temp_env(env: dict[str, str]) -> dict[str, str]:
+    """把 ``TMP``/``TEMP``/``TMPDIR`` 指向工作区内的可写目录（原地改并返回同一个 dict）。
+
+    为什么必须这么做：实测（用户任务 ``0ecdbfa8`` 的工作区）agent 自己写的
+    ``test_cli_end_to_end`` 在沙箱下报 ``PermissionError: [Errno 13]`` —— Python 用
+    ``mode=0o700`` 建临时目录时写的是**显式权限**，绕过了父目录继承下来的授权，
+    连创建者自己都打不开。结果模型看到一个**它永远修不好**的失败，反复读文件烧预算。
+    """
+    tmp = str(workspace_temp_dir())
+    for key in ("TMP", "TEMP", "TMPDIR"):
+        env[key] = tmp
+    return env
+
+
+def resolve_in_workspace(path: str | Path, base: Path | None = None) -> Path:
+    """把工具路径解析到**沙箱基准**下：相对路径按工作区解析，而不是按进程 cwd。
+
+    背景（实测 bug）：此前门卫与各实现都写 ``Path(path).resolve()`` —— 相对路径按 **cwd**
+    解析。默认工作区恰好等于 cwd 时看不出问题；一旦用户切换工作区，``path="tests"`` 会指到
+    cwd 下的 tests，于是① 被门卫误判「超出沙箱白名单」，② 即便放行也读写了错误的目录。
+
+    基准优先级：显式 ``base`` > ``current_workspace_dir`` 上下文 > 进程 cwd。
+    **绝对路径原样 resolve**（是否越界仍由门卫判定）；``..`` 由 resolve 归一化后再比对。
+    """
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        root = base if base is not None else current_workspace_dir.get()
+        candidate = (root if root is not None else Path.cwd()) / candidate
+    return candidate.resolve()
 
 
 @dataclass(slots=True)
@@ -82,7 +133,7 @@ class ToolGatekeeper:
             )
 
         # 文件类工具：沙箱路径校验（新增工具按需加入元组，不改已有校验逻辑）。
-        if tool_call.tool in ("file_write", "file_read", "file_edit", "file_list", "code_search", "data_query", "git_commit", "rollback", "git_log"):
+        if tool_call.tool in ("file_write", "file_delete", "file_read", "file_edit", "file_list", "code_search", "data_query", "git_commit", "rollback", "git_log"):
             self._check_sandbox_path(tool_call)
 
         # sandbox_run：可选 path 校验（path 存在则校验沙箱，不存在则跳过）。
@@ -116,11 +167,15 @@ class ToolGatekeeper:
     def _check_sandbox_path(self, tool_call: ToolCall) -> None:
         path_str = str(tool_call.args.get("path") or tool_call.args.get("repo_path") or "")
         if not path_str:
+            # 参数缺失 = E_VALIDATION，不是权限问题。
+            # 此前报 E_PERMISSION，把「模型忘了给参数」说成「没权限」—— 实测中模型因此
+            # 误判为「换个动作」，用户/审计也会把它记成权限被拒。同口径见 registry 的
+            # 「缺少必填参数」分支（那也是 E_VALIDATION）。
             self._reject(tool_call, "文件工具缺少 path/repo_path 参数")
-            raise permission_error(
+            raise validation_error(
                 "文件工具缺少 path/repo_path 参数", source="tool_gatekeeper", correlation_id=self.correlation_id
             )
-        candidate = Path(path_str).resolve()
+        candidate = resolve_in_workspace(path_str, self.workspace_dir)
         try:
             candidate.relative_to(self.workspace_dir)
         except ValueError:
@@ -156,8 +211,9 @@ class ToolGatekeeper:
         if url is None:
             return  # 无 url 字段（如 web_search），由实现内部校验构造的 URL
         if not str(url).strip():
+            # 同 _check_sandbox_path：缺参数是 E_VALIDATION，不是权限问题。
             self._reject(tool_call, "web 工具缺少 url 参数")
-            raise permission_error(
+            raise validation_error(
                 "web 工具缺少 url 参数",
                 source="tool_gatekeeper",
                 correlation_id=self.correlation_id,
@@ -177,7 +233,7 @@ class ToolGatekeeper:
         path_str = str(tool_call.args.get("path", "")).strip()
         if not path_str:
             return  # 可选参数，无值则跳过
-        candidate = Path(path_str).resolve()
+        candidate = resolve_in_workspace(path_str, self.workspace_dir)
         try:
             candidate.relative_to(self.workspace_dir)
         except ValueError:
@@ -192,8 +248,9 @@ class ToolGatekeeper:
         """test_run 的 target 混合校验：URL → url_guard，路径 → 沙箱。"""
         target = str(tool_call.args.get("target", "")).strip()
         if not target:
+            # 同 _check_sandbox_path：缺参数是 E_VALIDATION，不是权限问题。
             self._reject(tool_call, "test_run 缺少 target 参数")
-            raise permission_error(
+            raise validation_error(
                 "test_run 缺少 target 参数",
                 source="tool_gatekeeper",
                 correlation_id=self.correlation_id,
@@ -209,7 +266,7 @@ class ToolGatekeeper:
                     correlation_id=self.correlation_id,
                 ) from exc
         else:
-            candidate = Path(target).resolve()
+            candidate = resolve_in_workspace(target, self.workspace_dir)
             try:
                 candidate.relative_to(self.workspace_dir)
             except ValueError:
@@ -235,4 +292,10 @@ class ToolGatekeeper:
         ]
 
 
-__all__ = ["WORKSPACE_DIR", "ToolAudit", "ToolGatekeeper"]
+__all__ = [
+    "WORKSPACE_DIR",
+    "ToolAudit",
+    "ToolGatekeeper",
+    "current_workspace_dir",
+    "resolve_in_workspace",
+]

@@ -92,7 +92,8 @@ class TestDataQueryEdge:
         )
         with pytest.raises(AgentError) as exc_info:
             registry.execute(gatekeeper, call)
-        assert exc_info.value.error_name == "E_PERMISSION"
+        # 缺参数 → E_VALIDATION（不是 E_PERMISSION）。
+        assert exc_info.value.error_name == "E_VALIDATION"
 
     def test_invalid_limit(self, gatekeeper, tmp_path):
         csv_file = tmp_path / "data.csv"

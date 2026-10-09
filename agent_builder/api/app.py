@@ -3,23 +3,16 @@
 from __future__ import annotations
 
 import logging
-import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent_builder.api.routes import router
+from agent_builder.api.security import ALLOWED_ORIGINS, CLIENT_HEADER_NAME, OriginGuardMiddleware
 from agent_builder.llm.client import LLMClient
 from agent_builder.llm.config import LLMConfig
 
 logger = logging.getLogger(__name__)
-
-
-def _cors_origins() -> list[str]:
-    """允许跨域的来源：读 CORS_ALLOW_ORIGINS（逗号分隔），默认本地前端开发地址。"""
-    raw = os.environ.get("CORS_ALLOW_ORIGINS", "")
-    origins = [o.strip() for o in raw.split(",") if o.strip()]
-    return origins or ["http://localhost:8080", "http://127.0.0.1:8080"]
 
 
 def create_app() -> FastAPI:
@@ -30,14 +23,18 @@ def create_app() -> FastAPI:
         version="0.1.0",
     )
 
-    # CORS：默认仅允许本地前端（8080）跨域；用 CORS_ALLOW_ORIGINS 覆盖（逗号分隔）。
+    # CORS：只允许本机前端（8080）跨域调用后端（8000）。
+    # 安全约束：来源白名单 + 不共享凭据（不用 Cookie 鉴权，故 allow_credentials=False）。
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=_cors_origins(),
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=list(ALLOWED_ORIGINS),
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", CLIENT_HEADER_NAME],
     )
+    # 来源守卫：带 Origin 头且不在白名单的请求直接 403（拦截浏览器跨站与 DNS rebinding）。
+    # 注意注册顺序：后注册的中间件在最外层，故守卫先于 CORS 执行。
+    app.add_middleware(OriginGuardMiddleware)
 
     app.include_router(router)
 

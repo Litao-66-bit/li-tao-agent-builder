@@ -1,109 +1,191 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agent Builder</title>
-<link rel="stylesheet" href="styles.css">
+<!-- 静态资源版本号（?v=）：改前端资源后请同步 bump 这里的版本号（如 20261008），
+     否则浏览器会复用旧缓存（python -m http.server 不发 Cache-Control）。 -->
+<link rel="stylesheet" href="styles.css?v=20261104">
 </head>
 <body>
 
-  <!-- 顶栏：六阶段状态机 -->
-  <header class="topbar">
-    <div class="topbar-title">🧭 Agent Builder</div>
-    <nav class="stage-bar" id="stageBar">
-      <span class="stage">需求</span>
-      <span class="stage">计划</span>
-      <span class="stage">确认</span>
-      <span class="stage">执行</span>
-      <span class="stage">验证</span>
-      <span class="stage">汇报</span>
-    </nav>
-  </header>
+  <!-- ────────── 标题栏：应用名 + 当前任务标题 + 窗口控制（纯装饰，CSS 实现）────────── -->
+  <div class="titlebar">
+    <div class="titlebar-left">
+      <span class="app-icon" aria-hidden="true">🧭</span>
+      <h1 class="app-name">Agent Builder</h1>
+      <span class="titlebar-sep" aria-hidden="true"></span>
+      <span class="titlebar-task" id="titlebarTask" title="当前任务">未创建任务</span>
+    </div>
+    <div class="window-controls">
+      <button type="button" class="win-btn" id="winMin" title="最小化（网页版为视觉装饰）" aria-label="最小化">—</button>
+      <button type="button" class="win-btn" id="winMax" title="最大化（网页版为视觉装饰）" aria-label="最大化">▢</button>
+      <button type="button" class="win-btn win-close" id="winClose" title="关闭（网页版为视觉装饰）" aria-label="关闭">✕</button>
+    </div>
+  </div>
 
-  <!-- 主体三栏 -->
+  <!-- ────────── 菜单栏：文件 / 编辑 / 视图 / 任务 / 帮助 ────────── -->
+  <nav class="menubar" id="menubar" aria-label="主菜单">
+    <button type="button" class="menu-root" data-menu="file" aria-haspopup="true" aria-expanded="false">文件</button>
+    <button type="button" class="menu-root" data-menu="edit" aria-haspopup="true" aria-expanded="false">编辑</button>
+    <button type="button" class="menu-root" data-menu="view" aria-haspopup="true" aria-expanded="false">视图</button>
+    <button type="button" class="menu-root" data-menu="task" aria-haspopup="true" aria-expanded="false">任务</button>
+    <button type="button" class="menu-root" data-menu="help" aria-haspopup="true" aria-expanded="false">帮助</button>
+    <!-- 窄屏用：打开抽屉式侧栏（桌面隐藏） -->
+    <button type="button" class="topbar-menu-btn" id="menuBtn"
+            aria-label="展开侧栏" aria-expanded="false" aria-controls="sidePanels">☰ 侧栏</button>
+  </nav>
+  <!-- 菜单下拉（相对窗口定位，随窗口裁切） -->
+  <div class="menu-popup" id="menuPopup" role="menu" hidden></div>
+
+  <!-- ────────── 工具栏：当前状态（单一状态标签，不表达固定流程）+ 当前任务 ────────── -->
+  <div class="toolbar">
+    <span class="status-chip" id="taskStatusChip" data-state="idle" title="当前任务状态">
+      <span class="chip-dot" aria-hidden="true"></span>
+      <span id="taskStatusText">未创建任务</span>
+    </span>
+    <span class="toolbar-task" id="toolbarTask" title="当前任务">未创建任务</span>
+  </div>
+
+  <!-- ────────── 主体三栏 ────────── -->
   <div class="main">
 
-    <!-- 左栏：技能 / 插件 / 新建项目 -->
-    <aside class="sidebar-left">
-      <div class="panel">
-        <div class="panel-title">🔧 技能</div>
-        <div class="skill-row">
-          <span class="skill-label">文件读写</span>
-          <label class="toggle">
-            <input type="checkbox" checked>
-            <span class="toggle-track"></span>
-          </label>
-        </div>
-        <div class="skill-row">
-          <span class="skill-label">联网搜索</span>
-          <label class="toggle">
-            <input type="checkbox">
-            <span class="toggle-track"></span>
-          </label>
-        </div>
-        <div class="skill-row">
-          <span class="skill-label">命令执行 <span class="warn-badge" title="高风险操作，需审批">⚠</span></span>
-          <label class="toggle">
-            <input type="checkbox">
-            <span class="toggle-track"></span>
-          </label>
-        </div>
-      </div>
+    <!-- 侧栏容器：桌面 display:contents（两个 aside 仍是 .main 的弹性子项）；
+         窄屏整体变为 ☰ 打开的抽屉面板 -->
+    <div class="side-panels" id="sidePanels">
 
-      <div class="panel">
-        <div class="panel-title">🧩 插件</div>
-        <div class="plugin-item">· 海报生成</div>
-        <div class="plugin-item">· 网页抓取</div>
-        <div class="plugin-item">· Git 集成</div>
-        <div class="plugin-add">＋ 添加插件</div>
-      </div>
+      <!-- 左栏：任务列表 + 技能 / 插件 / 项目 -->
+      <aside class="sidebar-left">
+        <!-- 任务列表：多任务并存、可回看 -->
+        <div class="panel">
+          <div class="panel-title">🗂 任务</div>
+          <button type="button" class="new-task-btn" id="newTaskBtn">
+            <span class="new-task-big">＋ 新任务</span>
+            <span class="new-task-sub">终止当前任务并清空工作区</span>
+          </button>
+          <div class="task-list" id="taskList">
+            <div class="task-empty">加载中…</div>
+          </div>
+        </div>
 
-      <div class="new-project-btn">
-        <div class="big">＋ 新建项目</div>
-        <div class="sub">从需求开始构建 Agent</div>
-      </div>
-    </aside>
+        <div class="panel">
+          <div class="panel-title">🔧 技能</div>
+          <div class="panel-hint">尚未接入后端，仅作展示</div>
+          <div class="skill-row">
+            <span class="skill-label">文件读写</span>
+            <label class="toggle" title="技能开关尚未接入后端，仅作展示">
+              <input type="checkbox" aria-label="文件读写" checked>
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+          <div class="skill-row">
+            <span class="skill-label">联网搜索</span>
+            <label class="toggle" title="技能开关尚未接入后端，仅作展示">
+              <input type="checkbox" aria-label="联网搜索">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+          <div class="skill-row">
+            <span class="skill-label">命令执行 <span class="warn-badge" title="高风险操作，需审批">⚠</span></span>
+            <label class="toggle" title="技能开关尚未接入后端，仅作展示">
+              <input type="checkbox" aria-label="命令执行">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+        </div>
 
-    <!-- 中栏：对话区（动态渲染） -->
-    <main class="chat-area" id="chatArea">
-      <!-- 消息由 JS 动态插入 -->
+        <div class="panel">
+          <div class="panel-title">🧩 插件</div>
+          <div class="plugin-item">· 海报生成</div>
+          <div class="plugin-item">· 网页抓取</div>
+          <div class="plugin-item">· Git 集成</div>
+          <!-- 交互一律原生 <button>：键盘可达、读屏语义都由原生元素提供 -->
+          <button type="button" class="plugin-add" title="插件系统尚未接入后端">＋ 添加插件</button>
+        </div>
+
+        <!-- 最近项目：点击切换工作区（数据来自后端 /projects） -->
+        <div class="panel">
+          <div class="panel-title">📌 最近项目</div>
+          <div class="project-list" id="projectList">
+            <div class="project-empty">加载中…</div>
+          </div>
+        </div>
+
+        <!-- 新建项目：点击展开二级菜单（打开本地文件夹 / 新建文件夹 / 使用默认工作区） -->
+        <div class="new-project-wrap">
+          <button type="button" class="new-project-btn" aria-haspopup="menu" aria-expanded="false">
+            <span class="big">＋ 新建项目</span>
+            <span class="sub">选择本地文件夹开始构建</span>
+          </button>
+          <div class="project-menu" role="menu" hidden>
+            <button type="button" class="project-menu-item" role="menuitem" data-action="open-folder">
+              <span class="project-menu-icon">📂</span>
+              <span class="project-menu-text">
+                <strong>打开本地文件夹</strong>
+                <small>选一个已有目录作为工作区</small>
+              </span>
+            </button>
+            <button type="button" class="project-menu-item" role="menuitem" data-action="new-folder">
+              <span class="project-menu-icon">🗂️</span>
+              <span class="project-menu-text">
+                <strong>新建文件夹</strong>
+                <small>先选父目录，再命名新工作区</small>
+              </span>
+            </button>
+            <button type="button" class="project-menu-item" role="menuitem" data-action="default-workspace">
+              <span class="project-menu-icon">↺</span>
+              <span class="project-menu-text">
+                <strong>使用默认工作区</strong>
+                <small>回到内置默认目录</small>
+              </span>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- 右栏：产物面板（复用文件树 + 文件查看器） -->
+      <aside class="sidebar-right">
+        <div class="file-header">
+          <span class="file-title">📦 产物</span>
+          <button type="button" class="file-refresh-btn" title="重新拉取产物列表">↻ 刷新</button>
+        </div>
+        <div class="file-path" id="workspacePath" title="">工作区 / workspace</div>
+
+        <div class="file-tree" id="fileTree">
+          <div class="tree-node depth-0">⟳ 加载中…</div>
+        </div>
+      </aside>
+
+    </div>
+
+    <!-- 中栏：工作区 = 对话流 + 结构化区块（计划 / 提醒）。
+         role=log 必须放在内层容器：直接挂在 <main> 上会覆盖其隐式 main 地标（审计 P2） -->
+    <main class="chat-area" id="chatArea" aria-label="工作区">
+      <div class="chat-log" id="chatLog" role="log" aria-live="polite">
+        <!-- 消息由 JS 动态插入 -->
+      </div>
+      <!-- 计划已折进「过程」块（DeepSeek 式折叠），不再有独立槽位：
+           结构化区块只剩下面两个（提醒卡 / 交接卡），都不参与对话裁剪。 -->
+      <!-- 提醒卡槽位：到点暂停（待放行）/ 中断后的操作卡（按后端状态重建，不入 transcript） -->
+      <div class="action-slot" id="actionSlot"></div>
+      <!-- 交接提示卡片槽位：不写入 transcript（刷新即消失），仅后端记 ack -->
+      <div class="handover-slot" id="handoverSlot" aria-live="polite"></div>
     </main>
-
-    <!-- 右栏：文件框 -->
-    <aside class="sidebar-right">
-      <div class="file-header">
-        <span class="file-title">📁 工作区文件</span>
-        <span class="file-refresh-btn" title="重新拉取工作区文件树">↻ 刷新</span>
-      </div>
-      <div class="file-path">工作区 / workspace</div>
-
-      <div class="file-tree">
-        <div class="tree-node depth-0">⟳ 加载中…</div>
-      </div>
-
-      <!-- 选择本地文件：仅在前端读取预览，不上传后端 -->
-      <div class="local-file-bar">
-        <button type="button" class="local-file-btn" id="localFileBtn">＋ 选择本地文件</button>
-        <input type="file" id="localFileInput" hidden>
-      </div>
-
-      <div class="file-preview" id="filePreview">
-        <span class="label">文件预览</span>：点击文件树中的文件查看内容
-      </div>
-    </aside>
 
   </div>
 
-  <!-- 只读文件查看器：点击文件树中的文件打开（Esc / 点遮罩 / 关闭按钮 关闭） -->
+  <!-- 抽屉侧栏遮罩（仅窄屏显示） -->
+  <div class="nav-mask" id="navMask" hidden></div>
+
+  <!-- 文件查看器：点击文件树 / 计划步骤「查看产物」打开（Esc / 点遮罩 / 关闭按钮 关闭） -->
   <div class="file-viewer" id="fileViewer" hidden>
     <div class="file-viewer-mask" data-close="1"></div>
-    <div class="file-viewer-panel" role="dialog" aria-modal="true" aria-labelledby="fileViewerPath">
+    <div class="file-viewer-panel" role="dialog" aria-modal="true" aria-labelledby="fileViewerPath" tabindex="-1">
       <div class="file-viewer-head">
         <span class="file-viewer-path" id="fileViewerPath">—</span>
         <span class="file-viewer-meta" id="fileViewerMeta"></span>
         <span class="file-viewer-dirty" id="fileViewerDirty" hidden>● 未保存</span>
-        <button type="button" class="key-btn" id="fileViewerDownload" hidden>另存为</button>
         <button type="button" class="key-btn" id="fileViewerSave" hidden>保存</button>
         <button type="button" class="key-btn" id="fileViewerClose">关闭</button>
       </div>
@@ -111,27 +193,59 @@
     </div>
   </div>
 
+  <!-- 新建文件夹对话框：先选父目录，再输入名称（目录由后端创建） -->
+  <div class="project-dialog" id="newFolderDialog" hidden>
+    <div class="project-dialog-mask" data-close="1"></div>
+    <div class="project-dialog-panel" role="dialog" aria-modal="true" aria-labelledby="newFolderTitle">
+      <div class="project-dialog-title" id="newFolderTitle">新建文件夹</div>
+      <label class="project-dialog-label" for="newFolderName">文件夹名</label>
+      <input type="text" class="project-dialog-input" id="newFolderName"
+             placeholder="例如 my-agent-project" autocomplete="off" spellcheck="false">
+      <div class="project-dialog-hint" id="newFolderParent">父目录：—</div>
+      <div class="project-dialog-actions">
+        <button type="button" class="key-btn" id="newFolderCancel">取消</button>
+        <button type="button" class="key-btn key-btn-primary" id="newFolderConfirm">创建并使用</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 破坏性操作确认对话框（复用 .project-dialog 组件）：
+       默认聚焦「取消」；Esc / 点遮罩等同取消；关闭时焦点归还触发元素。 -->
+  <div class="project-dialog" id="confirmDialog" hidden>
+    <div class="project-dialog-mask" data-close="1"></div>
+    <div class="project-dialog-panel" role="dialog" aria-modal="true"
+         aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
+      <div class="project-dialog-title" id="confirmTitle">确认操作</div>
+      <p class="confirm-message" id="confirmMessage">—</p>
+      <div class="project-dialog-actions">
+        <button type="button" class="key-btn" id="confirmCancel">取消</button>
+        <button type="button" class="key-btn key-btn-destructive" id="confirmOk">确认</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 底部：模型设置 + 输入 -->
   <footer class="bottom-bar">
     <div class="model-settings">
-      <div class="setting-chip">
+      <div class="setting-chip" title="本次分解使用的模型（覆盖 DEEPSEEK_MODEL）">
         模型
-        <select id="modelSelect">
+        <select id="modelSelect" aria-label="模型">
           <option>deepseek-chat</option>
           <option>deepseek-reasoner</option>
+          <option>deepseek-v4-flash</option>
           <option>gpt-4o</option>
         </select>
-        <span style="color:#2da44e;">✓</span>
       </div>
-      <div class="setting-chip slider-wrap">
+      <!-- 默认温度 0.3，与后端/文档默认值保持一致 -->
+      <div class="setting-chip slider-wrap" title="LLM 采样温度（0=更确定，1=更发散）">
         推理强度
-        <span class="slider-value" id="tempValue">0.7</span>
-        <input type="range" id="tempSlider" min="0" max="1" step="0.1" value="0.7">
+        <span class="slider-value" id="tempValue">0.3</span>
+        <input type="range" id="tempSlider" min="0" max="1" step="0.1" value="0.3" aria-label="推理强度">
       </div>
-      <!-- 高级：可选下拉（前端占位，待后端字段接入后生效） -->
-      <div class="setting-chip" title="高级执行选项（当前为前端占位，待后端字段接入）">
+      <!-- 高级：控制分解产出的详细度，随 /plan 透传到后端 -->
+      <div class="setting-chip" title="产出详细度：详细=拆到可独立验证的原子粒度；精简=合并同类步骤">
         高级
-        <select id="advancedSelect">
+        <select id="advancedSelect" aria-label="产出详细度">
           <option value="default">默认</option>
           <option value="detailed">详细</option>
           <option value="concise">精简</option>
@@ -144,36 +258,78 @@
                autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="API 密钥">
         <button type="button" class="key-btn" id="apiKeySave">保存</button>
       </div>
+      <!-- API 密钥状态：只显示掩码/到期信息 + 轮换/删除，永不回显明文 -->
       <div class="setting-chip" id="apiKeyStatusChip" hidden>
-        <span class="key-display">⚿ 已保存 <span id="apiKeyMasked">—</span></span>
+        <span class="key-display">⚿ <span id="apiKeyStateText">已保存</span>
+          <span id="apiKeyMasked">—</span><span class="key-expiry" id="apiKeyExpiry"></span></span>
+        <button type="button" class="key-btn" id="apiKeyRotate" title="用新密钥替换当前密钥（不中断服务）">轮换</button>
         <button type="button" class="key-btn key-btn-danger" id="apiKeyDelete">删除密钥</button>
       </div>
       <div class="setting-chip">
         <label class="toggle">
-          <input type="checkbox" id="llmToggle">
+          <!-- 默认开启：本产品的核心是 LLM 拆分需求；关闭时不会产出步骤（会落到「暂无可用计划」卡片） -->
+          <input type="checkbox" id="llmToggle" aria-label="LLM 拆分" checked>
           <span class="toggle-track"></span>
         </label>
         LLM 拆分
       </div>
-      <div class="setting-chip" title="开启后副结构将进行自我检测与更新">
+      <!-- 执行自检：计划 ↔ 执行结果一致性核对（纯计算）。文案里不再带"副结构"，
+           避免与下面真正管副架构扩编的「副结构」开关混淆。 -->
+      <div class="setting-chip" title="开启后执行阶段追加一次「计划 ↔ 执行结果」一致性核对（纯计算，不改变执行结论）">
         <label class="toggle">
-          <input type="checkbox" id="selfCheckToggle">
+          <input type="checkbox" id="selfCheckToggle" aria-label="执行自检">
           <span class="toggle-track"></span>
         </label>
-        副结构自检
+        执行自检
+      </div>
+      <!-- 副结构：允许模型在运行时提议新角色 / 新工具（副架构扩编）。默认关闭；
+           无可用密钥时禁用 —— agentic 循环不跑，开着也不会产生提议（见 #subArchHint）。 -->
+      <div class="setting-chip" id="subArchChip"
+           title="允许模型在运行时提议新角色 / 新工具；提议需你批准后才会落盘（需配置 API 密钥）">
+        <label class="toggle">
+          <input type="checkbox" id="subArchToggle" aria-label="副结构（允许模型提议新角色）">
+          <span class="toggle-track"></span>
+        </label>
+        副结构
+      </div>
+      <div class="setting-chip" title="开启后分解前先召开评审会：多个 Agent 角色独立表态并收敛方案（需配置密钥）">
+        <label class="toggle">
+          <input type="checkbox" id="councilToggle" aria-label="评审会">
+          <span class="toggle-track"></span>
+        </label>
+        评审会
       </div>
     </div>
 
+    <!-- 副结构后果提示：只在「副结构」开启时出现（role=status：切换时播报一次，不打断操作）。
+         绿色开关只说明"已开"；开着会发生什么由这一行负责说清。 -->
+    <p class="sub-arch-hint" id="subArchHint" role="status" aria-live="polite" hidden></p>
+
     <div class="input-row">
-      <input type="text" class="msg-input" id="msgInput" placeholder="输入你的需求…（Enter 发送 / Shift+Enter 换行）">
-      <button class="btn-secondary" id="interruptBtn">⏸ 中断</button>
-      <button class="btn-send" id="sendBtn">发送 ➤</button>
+      <!-- 多行输入：Enter 发送 / Shift+Enter 换行（与占位文案一致） -->
+      <textarea class="msg-input" id="msgInput" rows="1" aria-label="需求输入"
+                placeholder="输入你的需求…（Enter 发送 / Shift+Enter 换行）"></textarea>
+      <button type="button" class="btn-secondary" id="interruptBtn" title="仅执行阶段可中断">⏸ 中断</button>
+      <button type="button" class="btn-send" id="sendBtn">发送 ➤</button>
     </div>
   </footer>
 
-  <!-- 先加载 API 封装层，再加载业务逻辑 -->
-  <script src="js/api.js"></script>
-  <script src="js/app.js"></script>
+  <!-- ────────── 状态栏：连通性 / 任务 / 模型 / 密钥 ────────── -->
+  <div class="statusbar">
+    <button type="button" class="status-item" id="statusBackend" title="后端服务连通性（点击重新自检）">
+      <span class="status-dot off" id="statusDot" aria-hidden="true"></span>
+      <span id="statusBackendText">后端未连接</span>
+    </button>
+    <button type="button" class="status-item" id="statusProject" title="当前工作区">📁 —</button>
+    <button type="button" class="status-item" id="statusModel" title="当前模型（点击聚焦模型选择）">模型：—</button>
+    <button type="button" class="status-item" id="statusKey" title="API 密钥状态（点击聚焦密钥输入）">⚿ 未配置密钥</button>
+    <span class="status-spacer"></span>
+    <button type="button" class="status-item" id="statusTask" title="当前任务状态">任务：未创建</button>
+  </div>
+
+  <!-- 先加载 API 封装层，再加载业务逻辑（版本号与上方 styles.css 保持一致） -->
+  <script src="js/api.js?v=20261104"></script>
+  <script src="js/app.js?v=20261104"></script>
 
 </body>
 </html>

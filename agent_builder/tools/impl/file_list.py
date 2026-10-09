@@ -6,9 +6,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from agent_builder.contracts.errors import tool_error, validation_error
+from agent_builder.tools.gatekeeper import resolve_in_workspace
 from agent_builder.tools.registry import current_correlation_id, registry
 from agent_builder.tools.spec import ToolSpec
 
@@ -23,7 +22,8 @@ def list_dir(path: str) -> str:
         path: 目录路径（已由门卫校验落在 WORKSPACE_DIR 内）。
 
     Returns:
-        每行一个条目，格式 ``[DIR]  name/`` 或 ``[FILE] name (N bytes)``。
+        每行一个条目，格式 ``[DIR]  <相对路径>/`` 或 ``[FILE] <相对路径> (N bytes)``；
+        相对路径**带上被列目录的前缀**（列工作区根时无前缀，如 ``[FILE] agents/a.py``）。
         目录在前、文件在后，各自按名称排序。空目录返回空字符串。
 
     Raises:
@@ -37,7 +37,8 @@ def list_dir(path: str) -> str:
             source="tool.file_list",
             correlation_id=cid,
         )
-    p = Path(path)
+    # 相对路径按**当前工作区**解析（不是进程 cwd）。
+    p = resolve_in_workspace(path)
     if not p.exists():
         raise validation_error(
             f"file_list: 路径不存在: {path}",
@@ -73,15 +74,26 @@ def list_dir(path: str) -> str:
             files = files[: MAX_ENTRIES - len(dirs)]
         truncated = True
 
+    # 条目要带**目录前缀**（如 ``agents/research_agent.py``）。
+    #
+    # 只给裸文件名时，模型知道"agents/ 里有个 research_agent.py"，却会把它当成工作区相对路径
+    # 去读 ``path="research_agent.py"``（工作区根）→「文件不存在」→ 反复重试（实测连撞 2–5 次
+    # 直到空转终止）。带上前缀后，模型可以把返回的名字**原样**喂给 file_read。
+    try:
+        rel = p.relative_to(resolve_in_workspace("."))
+    except ValueError:  # pragma: no cover - 门卫已保证 p 在工作区内
+        rel = None
+    prefix = "" if rel is None or str(rel) == "." else rel.as_posix().rstrip("/") + "/"
+
     lines: list[str] = []
     for e in dirs:
-        lines.append(f"[DIR]  {e.name}/")
+        lines.append(f"[DIR]  {prefix}{e.name}/")
     for e in files:
         try:
             size = e.stat().st_size
         except OSError:
             size = -1
-        lines.append(f"[FILE] {e.name} ({size} bytes)")
+        lines.append(f"[FILE] {prefix}{e.name} ({size} bytes)")
 
     if truncated:
         shown = len(dirs) + len(files)

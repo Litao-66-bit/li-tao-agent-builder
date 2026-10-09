@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -27,6 +28,7 @@ DOC_ACTIONS: frozenset[str] = frozenset({
     "web_fetch",
     "citation_check",
     "file_write",
+    "file_edit",
 })
 
 # 执行函数类型。
@@ -60,9 +62,12 @@ class DocWorker:
 
     Attributes:
         correlation_id: 关联 ID（贯穿审计日志）。
+        llm_client: LLM 客户端（可选；由运行时密钥工厂注入）。
+            可用时用于起草文档正文，不可用时只按素材/工具结果整理。
     """
 
     correlation_id: str = "c-unknown"
+    llm_client: Any = None
 
     def execute(
         self,
@@ -90,8 +95,9 @@ class DocWorker:
             )
 
         # 2. 检查素材是否充分（素材不足 → 请求补充而非编造）。
+        # LLM 可用时允许由 LLM 依据上下文起草，不再因缺素材提前返回。
         materials = step.inputs.get("materials", [])
-        if not materials and executor_fn is not None:
+        if not materials and executor_fn is not None and not self._llm_ready():
             # 无素材且需要执行 → 请求补充。
             return DocResult(
                 step_id=step.id,
@@ -109,8 +115,12 @@ class DocWorker:
         # 4. 执行（收集素材 + 组织文档）。
         try:
             result = executor_fn(step)
-            # 从 inputs 提取文档和来源。
-            document = step.inputs.get("document", str(result) if result else "")
+            # 从 inputs 提取文档；缺正文时由 LLM 起草，仍无则用工具结果兜底。
+            document = (
+                step.inputs.get("document")
+                or self._llm_document(step)
+                or (str(result) if result else "")
+            )
             raw_sources = step.inputs.get("sources", [])
             sources = self._parse_sources(raw_sources)
             pending = step.inputs.get("pending_supplements", [])
@@ -137,6 +147,26 @@ class DocWorker:
                 status="failed",
                 error=f"{type(exc).__name__}: {exc}",
             )
+
+    def _llm_ready(self) -> bool:
+        """LLM 客户端是否可用（鸭子类型判定，不依赖具体类型）。"""
+        return self.llm_client is not None and bool(getattr(self.llm_client, "is_available", False))
+
+    def _llm_document(self, step: Step) -> str:
+        """由 LLM 依据步骤上下文起草文档正文；不可用/失败返回空串（由调用方兜底）。"""
+        if not self._llm_ready():
+            return ""
+        materials = step.inputs.get("materials", [])
+        prompt = (
+            "根据以下素材组织一份结构化文档：每个事实标注来源，"
+            "素材未覆盖的内容明确写“待补充”，不得编造版本号/人名/数据。\n"
+            f"素材：{json.dumps(materials, ensure_ascii=False)}\n"
+            f"任务输入：{json.dumps(step.inputs, ensure_ascii=False)}"
+        )
+        try:
+            return self.llm_client.chat([{"role": "user", "content": prompt}]) or ""
+        except Exception:  # noqa: BLE001  LLM 调用失败降级为工具结果
+            return ""
 
     def _parse_sources(self, raw_sources: list[dict[str, Any]]) -> list[Source]:
         """解析来源标注清单。"""

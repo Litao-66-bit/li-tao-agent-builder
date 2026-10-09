@@ -137,3 +137,49 @@ class TestAbort:
         resp = client.post(f"/tasks/{tid}/abort")
         assert resp.status_code == 200
         assert resp.json()["status"] == "failed"
+
+
+class TestDeleteTask:
+    """DELETE /tasks/{id}：删除条目（不触发执行副作用；不释放项目状态）。"""
+
+    def test_delete_existing_task(self) -> None:
+        client = TestClient(create_app())
+        create = client.post("/tasks", json={"requirement": "test", "task_id": "del-me"})
+        assert create.status_code == 201
+        resp = client.delete("/tasks/del-me")
+        assert resp.status_code == 200
+        assert resp.json() == {"task_id": "del-me", "deleted": True}
+
+    def test_deleted_task_gone_from_get_and_summaries(self) -> None:
+        client = TestClient(create_app())
+        client.post("/tasks", json={"requirement": "a", "task_id": "keep"})
+        client.post("/tasks", json={"requirement": "b", "task_id": "drop"})
+        assert client.delete("/tasks/drop").status_code == 200
+        # 详情 404（与 GET /tasks/{id} 一致）。
+        assert client.get("/tasks/drop").status_code == 404
+        # 摘要列表不再包含它；另一个任务仍在。
+        summaries = client.get("/task-summaries").json()
+        ids = {s["task_id"] for s in summaries}
+        assert "drop" not in ids
+        assert "keep" in ids
+        # GET /tasks（ID 列表契约）同样不再包含。
+        assert "drop" not in client.get("/tasks").json()
+
+    def test_超长需求标题带省略号(self) -> None:
+        """卡 6：此前是硬截断，列表里显示成「…请把实现代码写进工」（在词中间断掉）。"""
+        client = TestClient(create_app())
+        client.post(
+            "/tasks",
+            json={"requirement": "帮我做一个调研论文的 agent：" + "细节" * 40, "task_id": "long-title"},
+        )
+
+        title = client.get("/task-summaries").json()[0]["title"]
+
+        assert title.endswith("…")
+        assert len(title) == 61  # 60 字上限 + 省略号
+
+    def test_delete_missing_task_returns_404(self) -> None:
+        client = TestClient(create_app())
+        resp = client.delete("/tasks/nonexistent")
+        assert resp.status_code == 404
+

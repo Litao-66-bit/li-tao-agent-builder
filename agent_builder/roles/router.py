@@ -6,6 +6,7 @@
 边界声明：
 - 只路由不执行：不直接调用工具（由执行者调用）
 - 步骤失败 → 重派 1 次；仍失败 → 上报总指挥
+- 不可重试错误（`AgentError.retryable=False`，或编排层在异常上标注的 `retryable=False`）→ **不重派**，直接上报
 - 执行者返回"权限不足" → 转发审批门请求用户
 - 无匹配执行者 → 上报总指挥
 
@@ -24,7 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent_builder.contracts.errors import validation_error
+from agent_builder.contracts.errors import AgentError, validation_error
 from agent_builder.contracts.schemas import Plan, Step
 
 # 步骤失败最大重派次数。
@@ -35,6 +36,7 @@ EXECUTOR_MAP: dict[str, str] = {
     # 代码类。
     "code_search": "code_executor",
     "file_write": "code_executor",
+    "file_delete": "code_executor",
     "file_read": "code_executor",
     "file_list": "code_executor",
     # 检索类。
@@ -169,7 +171,8 @@ class Router:
                 # 分类处理失败。
                 if result.status == "pending_approval":
                     pending_approval.append(sid)
-                elif result.status == "failed" and result.retries >= self.max_retries:
+                elif result.status == "failed":
+                    # 失败即上报：可重试的已耗尽重派；不可重试的立即上报（retries 可能为 0）。
                     pending_escalation.append(sid)
 
         return RouteResult(
@@ -219,8 +222,33 @@ class Router:
                     executor=executor,
                     retries=attempt,
                 )
+            except AgentError as exc:
+                # 契约（contracts/errors）：按 ``retryable`` 决定是否重派。
+                # 非可重试错误（E_PERMISSION / E_COST / E_INTERNAL / E_USER_CANCEL）
+                # 属确定性失败，重派无意义 → 直接记为 failed（retries=attempt）。
+                labeled = f"{exc.error_name}: {exc.info.message}"
+                if not exc.retryable:
+                    return ExecutionResult(
+                        step_id=sid,
+                        status="failed",
+                        error=labeled,
+                        executor=executor,
+                        retries=attempt,
+                    )
+                last_error = labeled
+                if attempt < self.max_retries:
+                    continue
             except Exception as exc:  # noqa: BLE001  路由者需捕获所有执行异常
                 last_error = f"{type(exc).__name__}: {exc}"
+                # 编排层可在异常上标注 retryable=False（角色已判定确定性失败）→ 不重派。
+                if getattr(exc, "retryable", True) is False:
+                    return ExecutionResult(
+                        step_id=sid,
+                        status="failed",
+                        error=last_error,
+                        executor=executor,
+                        retries=attempt,
+                    )
                 if attempt < self.max_retries:
                     continue
         return ExecutionResult(

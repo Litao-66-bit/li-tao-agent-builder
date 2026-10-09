@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from agent_builder.contracts.errors import AgentError
 from agent_builder.contracts.schemas import Step
 from agent_builder.roles.code_worker import (
     CODE_ACTIONS,
@@ -60,6 +61,22 @@ class TestCodeWorkerFunctional:
         result = w.execute(step, executor_fn=lambda s: "ok")
         assert result.status == "rejected"
         assert "超出代码范围" in result.error
+
+    def test_file_edit_能通过角色层派发(self):
+        """回归（实测用户任务 5ecf069d）：把 `file_edit` 接进权限矩阵与派发表**还不够** ——
+        角色实现层还有一份 `CODE_ACTIONS` 范围清单。漏了它，模型第 6 步主动用 `file_edit`
+        改实现时被判「任务超出代码范围」→ 整轮 0 产物。三层都要接才算真的可用。"""
+        w = _make_worker()
+        step = _make_step(
+            "file_edit",
+            {"path": "/x.py", "old_string": "a = 1", "new_string": "a = 2"},
+        )
+
+        result = w.execute(step, executor_fn=lambda s: "edited /x.py (第 1 行，替换 1 处)")
+
+        assert result.status == "done"
+        assert result.error is None
+        assert "/x.py" in result.files_changed
 
     def test_pending_dependencies(self):
         """有新依赖 → pending_approval。"""
@@ -117,6 +134,55 @@ class TestCodeWorkerFunctional:
         assert result.self_check_passed is False
         assert "RuntimeError" in result.error
 
+    def test_non_retryable_agent_error_no_self_check_retry(self):
+        """不可重试的契约异常（如 file_write 未授权覆盖）→ 不自查重试，直接上报。"""
+        w = _make_worker()
+        step = _make_step("file_write")
+        call_count = 0
+
+        def fn(s: Step) -> str:
+            nonlocal call_count
+            call_count += 1
+            raise AgentError(
+                "E_VALIDATION",
+                "file_write: 文件已存在且未授权覆盖",
+                "tool.file_write",
+                "c-test",
+                retryable=False,
+            )
+
+        result = w.execute(step, executor_fn=fn)
+        assert call_count == 1  # 未做内部自查重试
+        assert result.status == "failed"
+        assert result.retryable is False
+        assert "E_VALIDATION" in result.error
+
+    def test_参数类校验失败也不自查重试(self):
+        """``E_VALIDATION`` 是**确定性**失败，重试只会白跑。
+
+        错误码表里 E_VALIDATION 默认 ``retryable=True``，于是同一动作被重试 3 次 ——
+        实测 ``file_read`` 传错路径就在 gatekeeper 留下 3 条一模一样的审计行。
+        """
+        w = _make_worker()
+        step = _make_step("file_read")
+        call_count = 0
+
+        def fn(s: Step) -> str:
+            nonlocal call_count
+            call_count += 1
+            raise AgentError(
+                "E_VALIDATION",
+                "file_read: 文件不存在: research_agent.py",
+                "tool.file_read",
+                "c-test",
+            )
+
+        result = w.execute(step, executor_fn=fn)
+
+        assert call_count == 1  # 未做内部自查重试
+        assert result.status == "failed"
+        assert "E_VALIDATION" in result.error
+
     def test_files_changed_from_files_list(self):
         """files_changed 从 inputs['files'] 提取。"""
         w = _make_worker()
@@ -158,6 +224,23 @@ class TestCodeWorkerFunctional:
         step = _make_step("file_read", {"path": "/x.py"})
         result = w.execute(step, executor_fn=lambda s: "ok")
         assert result.status == "done"
+
+    def test_只读动作不报文件变更(self):
+        """只读动作（列出 / 读取 / 搜索）**没有改动任何文件** → files_changed 必须为空。
+
+        回归：此前一律从 ``inputs['path']`` 回填，于是「列出 tests」被当成产出了 ``tests``，
+        编排层的 ``artifacts_of()`` 信以为真 → 前端给它渲染「查看产物」，
+        点开必然报「路径不是文件: tests」。
+        """
+        w = _make_worker()
+        for action, inputs in (
+            ("file_list", {"path": "tests"}),
+            ("file_read", {"path": "tests"}),
+            ("code_search", {"path": "tests", "pattern": "def test_"}),
+        ):
+            result = w.execute(_make_step(action, inputs), executor_fn=lambda s: "ok")
+            assert result.status == "done", action
+            assert result.files_changed == [], action
 
 
 # ── 边界 ────────────────────────────────────────────────────────
@@ -202,15 +285,17 @@ class TestCodeWorkerPermissions:
             "file_list",
             "code_search",
             "file_write",
+            "file_edit",
             "sandbox_run",
             "memory_read",
             "audit_log",
         }
 
     def test_file_write_is_high_risk(self):
-        """file_write 是高风险工具（需审批）。"""
+        """file_write / file_edit 是高风险工具（需审批）。"""
         perm = DEFAULT_ROLE_PERMS["code_worker"]
         assert "file_write" in perm.high_risk_tools
+        assert "file_edit" in perm.high_risk_tools
 
     def test_no_unauthorized_tools(self):
         """code_worker 无网络/提交/回滚工具。"""
@@ -229,6 +314,7 @@ class TestCodeWorkerConstants:
     def test_code_actions_nonempty(self):
         assert len(CODE_ACTIONS) > 0
         assert "file_write" in CODE_ACTIONS
+        assert "file_edit" in CODE_ACTIONS
         assert "code_search" in CODE_ACTIONS
 
     def test_code_actions_excludes_non_code(self):

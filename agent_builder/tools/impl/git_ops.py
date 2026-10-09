@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 
 from agent_builder.contracts.errors import tool_error, validation_error
-from agent_builder.tools.gatekeeper import WORKSPACE_DIR
+from agent_builder.tools.gatekeeper import current_workspace_dir, resolve_in_workspace
 from agent_builder.tools.registry import current_correlation_id
 
 GIT_BIN = "git"
@@ -26,15 +26,19 @@ def validate_repo_path(repo_path: str) -> Path:
             source="tool.git_ops",
             correlation_id=cid,
         )
-    candidate = Path(repo_path).resolve()
-    try:
-        candidate.relative_to(WORKSPACE_DIR.resolve())
-    except ValueError:
-        raise validation_error(
-            f"git_ops: repo 路径 {repo_path} 超出沙箱白名单",
-            source="tool.git_ops",
-            correlation_id=cid,
-        ) from None
+    # 相对路径按**当前工作区**解析；基准取沙箱上下文（不是进程 cwd），
+    # 也不再拿硬编码的 WORKSPACE_DIR 比对 —— 那是个 Linux 路径，在本机永远判越界。
+    candidate = resolve_in_workspace(repo_path)
+    base = current_workspace_dir.get()
+    if base is not None:
+        try:
+            candidate.relative_to(base)
+        except ValueError:
+            raise validation_error(
+                f"git_ops: repo 路径 {repo_path} 超出沙箱白名单",
+                source="tool.git_ops",
+                correlation_id=cid,
+            ) from None
     return candidate
 
 

@@ -1,0 +1,110 @@
+[
+  {
+    "threat": "T1",
+    "control": "CORS 不共享凭据",
+    "status": "enforced",
+    "evidence": "allow_credentials=False"
+  },
+  {
+    "threat": "T1",
+    "control": "CORS 来源白名单（不含通配）",
+    "status": "enforced",
+    "evidence": "allow_origins=['http://127.0.0.1:8080', 'http://localhost:8080']"
+  },
+  {
+    "threat": "T1",
+    "control": "恶意网页跨站读密钥状态被阻断",
+    "status": "enforced",
+    "evidence": "GET /settings/api-key (Origin: evil.example) → 403"
+  },
+  {
+    "threat": "T2",
+    "control": "与本机同权限级进程的隔离",
+    "status": "residual",
+    "evidence": "HTTP 层无法隔离同 OS 用户进程；真正边界是操作系统账号"
+  },
+  {
+    "threat": "T2",
+    "control": "前端指向 IPv4 且携带标识头",
+    "status": "enforced",
+    "evidence": "API_BASE 用 127.0.0.1=True; 携带标识头=True"
+  },
+  {
+    "threat": "T2",
+    "control": "敏感端点强制本机客户端标识头",
+    "status": "enforced",
+    "evidence": "DELETE /settings/api-key=ok; GET /settings/api-key=ok; GET /workspace/file=ok; GET /workspace/files=ok; POST /settings/api-key=ok; POST /settings/api-key/rotate=ok; PUT /workspace/file=ok"
+  },
+  {
+    "threat": "T2",
+    "control": "无旧密钥时轮换被拒（语义为「替换」而非「首次设置」）",
+    "status": "enforced",
+    "evidence": "空存储轮换 → 400：当前没有可轮换的密钥；请先用 POST /settings/api-key 设置"
+  },
+  {
+    "threat": "T2",
+    "control": "缺标识头访问密钥端点被阻断",
+    "status": "enforced",
+    "evidence": "GET /settings/api-key (无标识头) → 403"
+  },
+  {
+    "threat": "T2",
+    "control": "轮换端点受本机客户端标识头保护",
+    "status": "enforced",
+    "evidence": "POST /settings/api-key/rotate (无标识头) → 403"
+  },
+  {
+    "threat": "T3",
+    "control": "保存响应不回显明文",
+    "status": "enforced",
+    "evidence": "POST 响应体字段=['configured', 'expired', 'expires_at', 'fingerprint', 'masked', 'remaining_s', 'rotated_at', 'rotated_from_fingerprint', 'rotation_count']; 含明文=False"
+  },
+  {
+    "threat": "T3",
+    "control": "查询响应不回显明文",
+    "status": "enforced",
+    "evidence": "GET 响应体含明文=False"
+  },
+  {
+    "threat": "T3",
+    "control": "状态响应模型无明文字段",
+    "status": "enforced",
+    "evidence": "ApiKeyStatusResponse=['configured', 'expired', 'expires_at', 'fingerprint', 'masked', 'remaining_s', 'rotated_at', 'rotated_from_fingerprint', 'rotation_count']"
+  },
+  {
+    "threat": "T4",
+    "control": "TTL 到期即失效并清除明文",
+    "status": "enforced",
+    "evidence": "ttl=10s：到期前 configured=True，到期后 configured=False，get()=None"
+  },
+  {
+    "threat": "T4",
+    "control": "密钥存储模块无任何落盘调用",
+    "status": "enforced",
+    "evidence": "secrets.py 落盘相关调用=无"
+  },
+  {
+    "threat": "T4",
+    "control": "重建存储单例后密钥失效（不落盘）",
+    "status": "enforced",
+    "evidence": "重启后 configured=False"
+  },
+  {
+    "threat": "T5",
+    "control": "审计参数按键名脱敏",
+    "status": "enforced",
+    "evidence": "redact_args(api_key)=sk-a***[redacted]"
+  },
+  {
+    "threat": "T6",
+    "control": "非法密钥（空/含空白/含控制字符）被拒",
+    "status": "enforced",
+    "evidence": "提交 6 个非法样本，全部返回 400=True"
+  },
+  {
+    "threat": "T7",
+    "control": "传输加密（HTTPS）",
+    "status": "residual",
+    "evidence": "开发环境为 127.0.0.1 明文 HTTP；正式部署必须置于 HTTPS 之后"
+  }
+]

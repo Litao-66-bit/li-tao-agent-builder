@@ -8,13 +8,55 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
+import agent_builder
 from agent_builder.contracts.errors import tool_error, validation_error
+from agent_builder.tools.gatekeeper import workspace_temp_dir, workspace_temp_env
 from agent_builder.tools.registry import current_correlation_id, registry
 from agent_builder.tools.spec import ToolSpec
+
+# 本项目包的上一级：注入给子进程的 PYTHONPATH，保证无论 cwd 在哪都能 import 到兼容插件。
+APP_ROOT = Path(agent_builder.__file__).resolve().parent.parent
+# 受限环境下修临时目录权限的 pytest 插件（详见 agent_builder/tools/pytest_tmpfix.py）。
+TMPFIX_PLUGIN = "agent_builder.tools.pytest_tmpfix"
+
+
+def _tmpfix_available() -> bool:
+    """插件能不能 import —— 不能就**绝不**加 ``-p``（pytest 会因导入失败直接报错退出）。"""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(TMPFIX_PLUGIN) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _pytest_argv(path: str) -> list[str]:
+    """拼 pytest 命令；在受限环境（Windows）下顺带注入临时目录兼容层。"""
+    cmd = [sys.executable, "-m", "pytest", path, "-v", "--tb=short"]
+    if os.name == "nt" and _tmpfix_available():
+        cmd += ["-p", TMPFIX_PLUGIN]
+    return cmd
+
+
+def _child_env() -> dict[str, str]:
+    """子进程环境：临时目录必须在工作区内可写；受限环境下再注入兼容插件所需变量。"""
+    env = workspace_temp_env(dict(os.environ))
+    if os.name == "nt" and _tmpfix_available():
+        env["PYTHONPATH"] = str(APP_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+        root = workspace_temp_dir() / "pytest"
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        env["PYTEST_DEBUG_TEMPROOT"] = str(root)
+    return env
 
 # 默认执行超时（秒）—— pytest 可能较慢。
 DEFAULT_TIMEOUT = 60.0
@@ -86,18 +128,28 @@ def _fetch_doc(url: str, timeout: float, cid: str) -> str:
 
 
 def _run_pytest(path: str, timeout: float, cid: str) -> str:
-    """运行 pytest 测试。"""
+    """运行 pytest 测试。
+
+    用 ``sys.executable -m pytest`` 而不是裸 ``pytest``：本机依赖是
+    ``pip install --target .deps`` 装的，``pytest`` 与 ``python`` **都不在 PATH**，
+    裸命令必然 ``WinError 2``（"未安装或不在 PATH" 其实是找不到那个可执行文件）。
+    跑测试的解释器就用**正在跑本应用的这一个**（pytest 是它的依赖），
+    既不用用户改 PATH，也不会挑到另一个 Python 环境。
+    """
     try:
         proc = subprocess.run(
-            ["pytest", path, "-v", "--tb=short"],
+            _pytest_argv(path),
             capture_output=True,
             text=True,
             timeout=timeout,
             check=False,
+            # 子进程的临时目录必须在**工作区内可写**，否则被测代码里凡是用 tmp_path /
+            # tempfile 的用例都会 PermissionError（沙箱下 0o700 目录连创建者都打不开）。
+            env=_child_env(),
         )
     except FileNotFoundError as exc:
         raise tool_error(
-            f"test_run: pytest 未安装或不在 PATH: {exc}",
+            f"test_run: pytest 不可用（无法用当前解释器执行 -m pytest）: {exc}",
             source="tool.test_run",
             correlation_id=cid,
         ) from exc
@@ -132,7 +184,7 @@ spec = ToolSpec(
         "required": ["target"],
         "additionalProperties": False,
     },
-    risk_level="low",
+    risk_level="medium",
     timeout_s=120.0,
     cost_band="low",
     allowed_roles=["operator"],

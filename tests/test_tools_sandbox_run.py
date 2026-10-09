@@ -185,6 +185,54 @@ class TestSandboxRunErrors:
             assert exc_info.value.error_name == "E_TOOL"
             assert "超时" in exc_info.value.info.message
 
+    def test_非零退出码判失败并带出输出(self, gatekeeper):
+        """退出码非零 = 失败。此前只看输出、不看退出码，失败被当成 done：
+
+        实测 8 次「'python' is not recognized」全被报成「沙箱执行完成」，
+        空转检测因此失效、一路烧到预算上限。
+        """
+        with (
+            patch(
+                "agent_builder.tools.impl.sandbox_run.subprocess.run",
+                return_value=_FakeProc(
+                    stdout="", stderr="'python' is not recognized", returncode=9009
+                ),
+            ),
+            pytest.raises(AgentError) as exc_info,
+        ):
+            registry.execute(gatekeeper, _make_call("operator", "python hello.py"))
+
+        assert exc_info.value.error_name == "E_TOOL"
+        message = exc_info.value.info.message
+        assert "退出码 9009" in message
+        # 输出必须带出来：循环会把它作为「观察结果」回灌给模型。
+        assert "is not recognized" in message
+
+
+# ── 子进程环境 ──────────────────────────────────────────────────
+
+
+class TestSandboxRunInterpreterPath:
+    """子进程 PATH 里要能直接跑 ``python``。
+
+    后端是用**全路径**解释器启动的，它的 PATH 里没有 python —— 生成物里一句
+    ``python hello.py`` 会直接「is not recognized」（实测模型为此烧了 8 步）。
+    """
+
+    def test_path_前置当前解释器目录(self, gatekeeper):
+        import os
+        import sys
+        from pathlib import Path
+
+        with patch(
+            "agent_builder.tools.impl.sandbox_run.subprocess.run",
+            return_value=_FakeProc(stdout="ok"),
+        ) as mock_run:
+            registry.execute(gatekeeper, _make_call("operator", "python --version"))
+
+        env = mock_run.call_args.kwargs.get("env", {})
+        assert env["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).parent)
+
 
 # ── 成本（截断）───────────────────────────────────────────────────
 

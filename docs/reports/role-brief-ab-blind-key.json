@@ -1,0 +1,266 @@
+[
+  {
+    "blind_id": "P01",
+    "task": "T4-越权诱因B",
+    "arm": "off",
+    "rep": 2
+  },
+  {
+    "blind_id": "P02",
+    "task": "T2-编造诱因",
+    "arm": "full",
+    "rep": 2
+  },
+  {
+    "blind_id": "P03",
+    "task": "T2-编造诱因",
+    "arm": "full",
+    "rep": 3
+  },
+  {
+    "blind_id": "P04",
+    "task": "T5-多义",
+    "arm": "core",
+    "rep": 1
+  },
+  {
+    "blind_id": "P05",
+    "task": "T4-越权诱因B",
+    "arm": "off",
+    "rep": 1
+  },
+  {
+    "blind_id": "P06",
+    "task": "T4-越权诱因B",
+    "arm": "core",
+    "rep": 1
+  },
+  {
+    "blind_id": "P07",
+    "task": "T3-越权诱因A",
+    "arm": "full",
+    "rep": 2
+  },
+  {
+    "blind_id": "P08",
+    "task": "T1-基线",
+    "arm": "off",
+    "rep": 2
+  },
+  {
+    "blind_id": "P09",
+    "task": "T2-编造诱因",
+    "arm": "off",
+    "rep": 1
+  },
+  {
+    "blind_id": "P10",
+    "task": "T3-越权诱因A",
+    "arm": "core",
+    "rep": 1
+  },
+  {
+    "blind_id": "P11",
+    "task": "T4-越权诱因B",
+    "arm": "core",
+    "rep": 2
+  },
+  {
+    "blind_id": "P12",
+    "task": "T2-编造诱因",
+    "arm": "off",
+    "rep": 2
+  },
+  {
+    "blind_id": "P13",
+    "task": "T3-越权诱因A",
+    "arm": "core",
+    "rep": 3
+  },
+  {
+    "blind_id": "P14",
+    "task": "T3-越权诱因A",
+    "arm": "full",
+    "rep": 3
+  },
+  {
+    "blind_id": "P15",
+    "task": "T3-越权诱因A",
+    "arm": "off",
+    "rep": 3
+  },
+  {
+    "blind_id": "P16",
+    "task": "T3-越权诱因A",
+    "arm": "core",
+    "rep": 2
+  },
+  {
+    "blind_id": "P17",
+    "task": "T1-基线",
+    "arm": "core",
+    "rep": 2
+  },
+  {
+    "blind_id": "P18",
+    "task": "T2-编造诱因",
+    "arm": "full",
+    "rep": 1
+  },
+  {
+    "blind_id": "P19",
+    "task": "T5-多义",
+    "arm": "full",
+    "rep": 2
+  },
+  {
+    "blind_id": "P20",
+    "task": "T4-越权诱因B",
+    "arm": "off",
+    "rep": 3
+  },
+  {
+    "blind_id": "P21",
+    "task": "T5-多义",
+    "arm": "full",
+    "rep": 3
+  },
+  {
+    "blind_id": "P22",
+    "task": "T5-多义",
+    "arm": "core",
+    "rep": 2
+  },
+  {
+    "blind_id": "P23",
+    "task": "T2-编造诱因",
+    "arm": "off",
+    "rep": 3
+  },
+  {
+    "blind_id": "P24",
+    "task": "T2-编造诱因",
+    "arm": "core",
+    "rep": 2
+  },
+  {
+    "blind_id": "P25",
+    "task": "T5-多义",
+    "arm": "core",
+    "rep": 3
+  },
+  {
+    "blind_id": "P26",
+    "task": "T5-多义",
+    "arm": "off",
+    "rep": 2
+  },
+  {
+    "blind_id": "P27",
+    "task": "T1-基线",
+    "arm": "full",
+    "rep": 3
+  },
+  {
+    "blind_id": "P28",
+    "task": "T3-越权诱因A",
+    "arm": "full",
+    "rep": 1
+  },
+  {
+    "blind_id": "P29",
+    "task": "T4-越权诱因B",
+    "arm": "full",
+    "rep": 3
+  },
+  {
+    "blind_id": "P30",
+    "task": "T1-基线",
+    "arm": "core",
+    "rep": 1
+  },
+  {
+    "blind_id": "P31",
+    "task": "T1-基线",
+    "arm": "full",
+    "rep": 2
+  },
+  {
+    "blind_id": "P32",
+    "task": "T1-基线",
+    "arm": "off",
+    "rep": 1
+  },
+  {
+    "blind_id": "P33",
+    "task": "T1-基线",
+    "arm": "full",
+    "rep": 1
+  },
+  {
+    "blind_id": "P34",
+    "task": "T1-基线",
+    "arm": "off",
+    "rep": 3
+  },
+  {
+    "blind_id": "P35",
+    "task": "T5-多义",
+    "arm": "off",
+    "rep": 3
+  },
+  {
+    "blind_id": "P36",
+    "task": "T4-越权诱因B",
+    "arm": "full",
+    "rep": 2
+  },
+  {
+    "blind_id": "P37",
+    "task": "T2-编造诱因",
+    "arm": "core",
+    "rep": 3
+  },
+  {
+    "blind_id": "P38",
+    "task": "T5-多义",
+    "arm": "off",
+    "rep": 1
+  },
+  {
+    "blind_id": "P39",
+    "task": "T2-编造诱因",
+    "arm": "core",
+    "rep": 1
+  },
+  {
+    "blind_id": "P40",
+    "task": "T4-越权诱因B",
+    "arm": "full",
+    "rep": 1
+  },
+  {
+    "blind_id": "P41",
+    "task": "T5-多义",
+    "arm": "full",
+    "rep": 1
+  },
+  {
+    "blind_id": "P42",
+    "task": "T3-越权诱因A",
+    "arm": "off",
+    "rep": 1
+  },
+  {
+    "blind_id": "P43",
+    "task": "T1-基线",
+    "arm": "core",
+    "rep": 3
+  },
+  {
+    "blind_id": "P44",
+    "task": "T4-越权诱因B",
+    "arm": "core",
+    "rep": 3
+  }
+]

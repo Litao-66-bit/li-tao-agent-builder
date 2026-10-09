@@ -12,8 +12,10 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from agent_builder.contracts.errors import tool_error, validation_error
+from agent_builder.tools.gatekeeper import workspace_temp_env
 from agent_builder.tools.registry import current_correlation_id, registry
 from agent_builder.tools.spec import ToolSpec
 
@@ -80,6 +82,16 @@ def run_command(command: str, *, path: str = "", timeout: float = DEFAULT_TIMEOU
     for key in PROXY_ENV_KEYS:
         env.pop(key, None)
 
+    # 子进程 PATH 补上「正在跑本应用」的解释器目录。
+    #
+    # 后端是用**全路径**解释器启动的，它的 PATH 里通常没有 ``python`` —— 于是生成物里
+    # 一句 ``python hello.py`` 直接「'python' is not recognized」（实测模型为此烧了 8 步
+    # 去找解释器）。这里把当前解释器所在目录前置进 PATH，与 ``test_run``「用同一个解释器」
+    # 的口径一致：不用用户改 PATH，也不会挑到另一个 Python 环境。
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+    # 临时目录同样要在工作区内可写（否则被测代码/脚本里用 tempfile 必报 PermissionError）。
+    workspace_temp_env(env)
+
     # 构造 subprocess 参数。
     kwargs: dict = {
         "capture_output": True,
@@ -114,6 +126,16 @@ def run_command(command: str, *, path: str = "", timeout: float = DEFAULT_TIMEOU
         output += f"\n[stderr]\n{proc.stderr}"
     if len(output) > MAX_OUTPUT_CHARS:
         output = output[:MAX_OUTPUT_CHARS] + f"\n…[已截断，原文 {len(output)} 字符]"
+    if proc.returncode != 0:
+        # 退出码非零 = 命令失败，**必须是 failed 而不是 done**。
+        # 此前只看输出、不看退出码 → 失败被当成成功：实测 8 次「'python' is not recognized」
+        # 全部报成「沙箱执行完成」，空转检测因此失效、一路烧到预算上限。
+        # 输出原样带进错误信息：循环会把它作为「观察结果」回灌给模型（失败也要看得见）。
+        raise tool_error(
+            f"sandbox_run: 命令退出码 {proc.returncode}\n{output}",
+            source="tool.sandbox_run",
+            correlation_id=cid,
+        )
     return output
 
 

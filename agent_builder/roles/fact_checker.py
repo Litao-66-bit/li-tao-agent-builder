@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -73,10 +74,13 @@ class FactChecker:
     Attributes:
         correlation_id: 关联 ID（贯穿审计日志）。
         max_retries: 来源失效重试次数。
+        llm_client: LLM 客户端（可选；由运行时密钥工厂注入）。
+            可用且步骤未给出核验结果时，由 LLM 复核产出。
     """
 
     correlation_id: str = "c-unknown"
     max_retries: int = MAX_RETRIES
+    llm_client: Any = None
 
     def execute(
         self,
@@ -120,8 +124,10 @@ class FactChecker:
                         continue
                     raise
 
-            # 从 inputs 提取核验结果。
+            # 从 inputs 提取核验结果；缺失且 LLM 可用 → 由 LLM 复核产出。
             raw_items = step.inputs.get("verifications", [])
+            if not raw_items and self._llm_ready():
+                raw_items = self._llm_verifications(step)
             items = self._parse_items(raw_items, step.inputs.get("retries", 0))
             passed = sum(1 for i in items if i.status == "passed")
             suspicious = sum(1 for i in items if i.status == "suspicious")
@@ -155,6 +161,36 @@ class FactChecker:
                 status="failed",
                 error=f"{type(exc).__name__}: {exc}",
             )
+
+    def _llm_ready(self) -> bool:
+        """LLM 客户端是否可用（鸭子类型判定，不依赖具体类型）。"""
+        return self.llm_client is not None and bool(getattr(self.llm_client, "is_available", False))
+
+    def _llm_verifications(self, step: Step) -> list[dict[str, Any]]:
+        """由 LLM 复核步骤上下文中的声明；不可用/失败返回空列表。
+
+        只允许三种结论：passed（通过）/ suspicious（存疑）/ falsified（证伪）；
+        无法核实一律标 suspicious，不放行。
+        """
+        schema = (
+            '{"verifications": [{"claim": "", "source": "", '
+            '"status": "passed|suspicious|falsified", "evidence": ""}]}'
+        )
+        prompt = (
+            "核对下面上下文中的关键声明（数字/版本号/人名/引用来源）。\n"
+            "无法核实的标 suspicious，不要臆断；只返回结构化结果。\n"
+            f"上下文：{json.dumps(step.inputs, ensure_ascii=False)}"
+        )
+        try:
+            result = self.llm_client.complete_json(prompt, schema_hint=schema)
+        except Exception:  # noqa: BLE001  LLM 调用失败降级为无核验项
+            return []
+        if not isinstance(result, dict):
+            return []
+        raw = result.get("verifications", [])
+        if not isinstance(raw, list):
+            return []
+        return [item for item in raw if isinstance(item, dict) and "claim" in item]
 
     def _parse_items(self, raw_items: list[dict[str, Any]], retries: int = 0) -> list[VerificationItem]:
         """解析核验结果清单。"""

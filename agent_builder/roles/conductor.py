@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from agent_builder.contracts.errors import internal_error, validation_error
 from agent_builder.contracts.schemas import Interruption, TaskState
@@ -70,6 +71,10 @@ class Conductor:
             ) from exc
         self.task_state.status = new_status
         self.task_state.current_stage = new_status.value
+        # 每次转换刷新 updated_at。此前它只在创建时由 default_factory 赋值、**再无写入点**，
+        # 于是 ①「任务耗时」恒为 0 秒；② ``list_summaries`` 按 updated_at 倒序 → 排序恒等于
+        # 创建顺序，刚跑完的任务不会置顶（与「按更新时间倒序」的契约不符）。
+        self.task_state.updated_at = datetime.now(timezone.utc).isoformat()
         return new_status
 
     # ── 五阶段流程 ──────────────────────────────────────────────
@@ -111,12 +116,27 @@ class Conductor:
         return self._transition(TaskEvent.PLAN_ACCEPTED)
 
     def handle_plan_rejected(self) -> TaskStatus:
-        """阶段 3b：用户拒绝计划 → 重新规划（PLAN_REJECTED → PLANNING）。"""
+        """阶段 3b：用户拒绝计划 → 重新规划（PLAN_REJECTED → PLANNING）。
+
+        允许两个来源：``awaiting_confirm``（常规改计划）与 ``interrupted``
+        （「到点暂停」待放行 / 手动中断后改计划）。从中断态退回时一并清除中断
+        快照，与本类 ``handle_resume`` 的清理口径一致（不留下过期 resume_point）。
+        """
+        self.task_state.interrupted = None
         return self._transition(TaskEvent.PLAN_REJECTED)
 
     def handle_all_steps_done(self) -> TaskStatus:
         """阶段 4：全部步骤完成 → 验证（ALL_STEPS_DONE → VERIFYING）。"""
         return self._transition(TaskEvent.ALL_STEPS_DONE)
+
+    def touch(self) -> None:
+        """只刷新 ``updated_at``（不改状态、不改阶段）。
+
+        用途：一次请求内把活干完、但**状态没有转换**（例如 agentic 循环非收敛停下，任务仍留在
+        executing）—— 那时 ``_transition`` 不会被调用，``updated_at`` 停在"进入执行"的时刻，
+        前端算出的「用时」恒为 0 秒。
+        """
+        self.task_state.updated_at = datetime.now(timezone.utc).isoformat()
 
     def handle_interrupt(self, reason: str = "user_stop") -> TaskStatus:
         """中断：用户点击停止 → 挂起（INTERRUPT → INTERRUPTED）。

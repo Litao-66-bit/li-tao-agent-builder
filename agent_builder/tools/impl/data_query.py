@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from agent_builder.contracts.errors import tool_error, validation_error
+from agent_builder.tools.gatekeeper import resolve_in_workspace
 from agent_builder.tools.registry import current_correlation_id, registry
 from agent_builder.tools.spec import ToolSpec
 
@@ -48,7 +49,8 @@ def query_data(path: str, limit: int = DEFAULT_LIMIT) -> str:
         )
     limit = min(limit, MAX_ROWS)
 
-    p = Path(path)
+    # 相对路径按**当前工作区**解析（不是进程 cwd）。
+    p = resolve_in_workspace(path)
     if not p.exists():
         raise validation_error(
             f"data_query: 文件不存在: {path}",

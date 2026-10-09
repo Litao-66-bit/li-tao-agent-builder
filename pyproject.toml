@@ -6,9 +6,8 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MPL-2.0" }
 dependencies = [
-    "langgraph>=0.2",
+    # langchain-openai 是**在用**的：llm/client.py 用它建 OpenAI 兼容传输层（DeepSeek 走同一协议）。
     "langchain-openai>=0.2",
-    "langgraph-checkpoint-sqlite>=2.0",
     "python-dotenv>=1.0",
     "pydantic>=2.6",
     "fastapi>=0.110",
@@ -32,6 +31,12 @@ include = ["agent_builder*"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# 本地依赖目录（沙箱下无法写入解释器 site-packages 时的 --target 安装位置），非项目源码。
+# _sample_backup 是**实测产物的草稿目录**（agent 自己写出来的代码，用于回看与回归对照），
+# 同样不是项目源码 —— 把它排除，免得每跑一轮都要为了迁就 lint 去改被测方的产出。
+# .dsh-scratch 是本机 DSH 插件事故的现场目录（含回滚备份与一个临时验证用 shim），
+# 已被 .gitignore 忽略，同样不是项目源码。
+exclude = [".deps", "_sample_backup", ".dsh-scratch"]
 
 [tool.ruff.lint.per-file-ignores]
 "agent_builder/api/routes.py" = ["B008"]  # FastAPI Depends() 在默认参数中是标准模式

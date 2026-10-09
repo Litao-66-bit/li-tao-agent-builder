@@ -10,7 +10,7 @@ import pytest
 
 from agent_builder.contracts.errors import AgentError
 from agent_builder.contracts.schemas import RolePerm, ToolCall
-from agent_builder.tools.gatekeeper import ToolGatekeeper
+from agent_builder.tools.gatekeeper import ToolGatekeeper, current_workspace_dir
 from agent_builder.tools.impl import audit_store
 from agent_builder.tools.impl.audit_log import MAX_DETAIL_CHARS
 from agent_builder.tools.registry import registry
@@ -88,6 +88,18 @@ class TestAuditLogFunctional:
 
 
 # ── 边界 ────────────────────────────────────────────────────────
+
+
+class TestDefaultStoreLocation:
+    """回归：默认审计位置必须在**当前工作区内**（同 memory_store，见其同名测试）。"""
+
+    def test_默认审计目录落在工作区内(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.delenv("AGENT_AUDIT_FILE", raising=False)
+        token = current_workspace_dir.set(tmp_path)
+        try:
+            assert audit_store.default_audit_dir() == tmp_path / ".agent-audit"
+        finally:
+            current_workspace_dir.reset(token)
 
 
 class TestAuditLogEdge:

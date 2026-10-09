@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -70,9 +71,12 @@ class Summarizer:
 
     Attributes:
         correlation_id: 关联 ID（贯穿审计日志）。
+        llm_client: LLM 客户端（可选；由运行时密钥工厂注入）。
+            可用且步骤未给出结论时，由 LLM 汇总产出。
     """
 
     correlation_id: str = "c-unknown"
+    llm_client: Any = None
 
     def execute(
         self,
@@ -104,14 +108,24 @@ class Summarizer:
 
         # 3. 执行汇总。
         try:
-            executor_fn(step)
-            # 从 inputs 提取报告数据。
+            if not self._llm_ready():
+                # 无 LLM：沿用原行为，由执行函数产出，结果从 inputs 提取。
+                executor_fn(step)
+            # 优先取步骤显式声明的结构化字段。
             conclusions = list(step.inputs.get("conclusions", []))
             evidence = list(step.inputs.get("evidence", []))
             sources = list(step.inputs.get("sources", []))
             pending_items = list(step.inputs.get("pending_items", []))
             next_steps = list(step.inputs.get("next_steps", []))
             missing_items = list(step.inputs.get("missing_items", []))
+
+            # 缺结论且 LLM 可用 → 由 LLM 汇总（不新增判断、不编造）。
+            if self._llm_ready() and not conclusions:
+                generated = self._llm_report(step)
+                conclusions = generated.get("conclusions", [])
+                evidence = evidence or generated.get("evidence", [])
+                sources = sources or generated.get("sources", [])
+                next_steps = next_steps or generated.get("next_steps", [])
 
             # 4. 结构化整理（五段式）。
             sections = self._build_sections(
@@ -141,6 +155,31 @@ class Summarizer:
                 status="failed",
                 error=f"{type(exc).__name__}: {exc}",
             )
+
+    def _llm_ready(self) -> bool:
+        """LLM 客户端是否可用（鸭子类型判定，不依赖具体类型）。"""
+        return self.llm_client is not None and bool(getattr(self.llm_client, "is_available", False))
+
+    def _llm_report(self, step: Step) -> dict[str, list[str]]:
+        """由 LLM 汇总执行上下文为四类要素；不可用/失败返回空字典。"""
+        schema = '{"conclusions": [], "evidence": [], "sources": [], "next_steps": []}'
+        prompt = (
+            "把下面的执行上下文汇总为「结论/依据/来源/下一步」四类要素。\n"
+            "要求：只做归纳，不新增判断、不编造；没有对应内容的类别返回空列表。\n"
+            f"上下文：{json.dumps(step.inputs, ensure_ascii=False)}"
+        )
+        try:
+            result = self.llm_client.complete_json(prompt, schema_hint=schema)
+        except Exception:  # noqa: BLE001  LLM 调用失败降级为空报告
+            return {}
+        if not isinstance(result, dict):
+            return {}
+        generated: dict[str, list[str]] = {}
+        for key in ("conclusions", "evidence", "sources", "next_steps"):
+            raw = result.get(key, [])
+            if isinstance(raw, list):
+                generated[key] = [str(item) for item in raw]
+        return generated
 
     def _build_sections(
         self,

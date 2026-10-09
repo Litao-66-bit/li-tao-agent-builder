@@ -7,6 +7,7 @@ subprocess.run 和 urllib.request.urlopen 全程 mock。
 from __future__ import annotations
 
 import subprocess
+import sys
 import urllib.error
 from unittest.mock import patch
 
@@ -75,6 +76,25 @@ class TestTestRunFunctional:
         assert "1 passed" in call.result
         assert call.status == "executed"
 
+    def test_用当前解释器跑pytest(self, gatekeeper, tmp_path):
+        """回归：必须用 ``sys.executable -m pytest``，不能依赖 PATH 里的裸 ``pytest``。
+
+        本机依赖是 ``pip install --target .deps`` 装的 —— ``pytest`` 与 ``python``
+        **都不在 PATH**，裸命令必然 ``WinError 2``（实测报「未安装或不在 PATH」）。
+        钉住这条，避免有人再改回裸 ``pytest``。
+        """
+        test_file = tmp_path / "test_x.py"
+        test_file.write_text("def test_ok(): pass")
+        with patch(
+            "agent_builder.tools.impl.test_run.subprocess.run",
+            return_value=_FakeProc(stdout="1 passed"),
+        ) as run:
+            registry.execute(gatekeeper, _make_call("operator", str(test_file)))
+        argv = run.call_args[0][0]
+        assert argv[0] == sys.executable
+        assert argv[1:3] == ["-m", "pytest"]
+        assert argv[0] != "pytest"
+
     def test_doc_mode(self, gatekeeper):
         with patch(
             "agent_builder.tools.impl.test_run.urllib.request.urlopen",
@@ -106,7 +126,8 @@ class TestTestRunEdge:
         )
         with pytest.raises(AgentError) as exc_info:
             registry.execute(gatekeeper, call)
-        assert exc_info.value.error_name == "E_PERMISSION"
+        # 缺参数 → E_VALIDATION（不是 E_PERMISSION）。
+        assert exc_info.value.error_name == "E_VALIDATION"
 
     def test_invalid_timeout(self, gatekeeper, tmp_path):
         test_file = tmp_path / "test_x.py"
@@ -234,17 +255,100 @@ class TestTestRunCost:
         assert "已截断" in call.result
 
 
+class TestWorkspaceTempEnv:
+    """agent 自己写的 temp-using 测试在沙箱下必挂（``os.mkdir(0o700)`` 写的显式权限绕过
+    了父目录继承的授权，连创建者自己都打不开 → ``PermissionError: [Errno 13]``）。
+    所以 test_run / sandbox_run 都必须把子进程的临时目录指到工作区内。"""
+
+    def test_临时环境指向工作区内且真的建好了(self, tmp_path):
+        from pathlib import Path
+
+        from agent_builder.tools.gatekeeper import current_workspace_dir, workspace_temp_env
+
+        token = current_workspace_dir.set(tmp_path)
+        try:
+            env = workspace_temp_env({})
+        finally:
+            current_workspace_dir.reset(token)
+
+        assert env["TMP"] == env["TEMP"] == env["TMPDIR"]
+        assert Path(env["TMP"]) == tmp_path / ".agent-tmp"
+        assert Path(env["TMP"]).is_dir()
+
+    def test_test_run_把临时环境传给子进程(self, monkeypatch, tmp_path):
+        """不只是有 helper：``_run_pytest`` 必须真的把它传下去。"""
+        import agent_builder.tools.impl.test_run as tr
+        from agent_builder.tools.gatekeeper import current_workspace_dir
+
+        captured = {}
+
+        class _Proc:
+            returncode = 0
+            stdout = "1 passed"
+            stderr = ""
+
+        def _fake_run(*args, **kwargs):
+            captured.update(kwargs)
+            return _Proc()
+
+        monkeypatch.setattr(tr.subprocess, "run", _fake_run)
+        token = current_workspace_dir.set(tmp_path)
+        try:
+            tr._run_pytest("tests/test_x.py", 30.0, "c-test")
+        finally:
+            current_workspace_dir.reset(token)
+
+        assert captured["env"]["TMP"] == str(tmp_path / ".agent-tmp")
+
+
 # ── 注册 ────────────────────────────────────────────────────────
 
 
-class TestTestRunRegistration:
+    def test_Windows_下注入临时目录兼容层(self, monkeypatch, tmp_path):
+        """实测（用户任务 8d50ac95）：agent 自己写的 tmpdir 用例在受限环境下必红
+        （``os.mkdir(0o700)`` 连创建者都打不开），而模型**修不掉**它 —— 它只能看着
+        「失败 2 项」空转。所以 test_run 必须注入兼容插件并把 pytest 临时根放到工作区内。"""
+        import os as _os
+
+        import agent_builder.tools.impl.test_run as tr
+        from agent_builder.tools.gatekeeper import current_workspace_dir
+
+        if _os.name != "nt":
+            pytest.skip("该缺陷是 Windows 受限令牌特有的")
+
+        token = current_workspace_dir.set(tmp_path)
+        try:
+            argv = tr._pytest_argv("tests/test_x.py")
+            env = tr._child_env()
+        finally:
+            current_workspace_dir.reset(token)
+
+        assert "-p" in argv
+        assert tr.TMPFIX_PLUGIN in argv
+        assert str(tr.APP_ROOT) in env["PYTHONPATH"]
+        assert env["PYTEST_DEBUG_TEMPROOT"] == str(tmp_path / ".agent-tmp" / "pytest")
+
+    def test_导入不了插件就绝不加_p(self, monkeypatch):
+        """插件 import 不到时加 ``-p`` 会让 pytest 直接报错退出 —— 必须退回原始命令。"""
+        import agent_builder.tools.impl.test_run as tr
+
+        monkeypatch.setattr(tr, "_tmpfix_available", lambda: False)
+
+        argv = tr._pytest_argv("tests/test_x.py")
+
+        assert "-p" not in argv
+        assert argv[:4] == [tr.sys.executable, "-m", "pytest", "tests/test_x.py"]
+
+
+
     def test_registered(self):
         assert "test_run" in registry.list_tools()
 
     def test_spec_fields(self):
         spec, _ = registry.get("test_run")
         assert spec.name == "test_run"
-        assert spec.risk_level == "low"
+        # 会执行外部命令/代码，与 sandbox_run 同级，不得标为 low（见工具评分「风险分级正确」维度）
+        assert spec.risk_level == "medium"
         assert spec.cost_band == "low"
         assert spec.timeout_s == 120.0
         assert spec.allowed_roles == ["operator"]

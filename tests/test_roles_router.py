@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_builder.contracts.errors import AgentError
+from agent_builder.contracts.errors import AgentError, permission_error, timeout_error
 from agent_builder.contracts.schemas import Plan, Step
 from agent_builder.roles.router import (
     DEFAULT_EXECUTOR,
@@ -264,3 +264,65 @@ class TestRouterConstants:
         """执行者类型有多样性（不全是同一个）。"""
         types = set(EXECUTOR_MAP.values())
         assert len(types) >= 4
+
+
+# ── 可重试性契约（contracts/errors）─────────────────────────────
+
+
+class TestRouterRetryableContract:
+    """Router 必须尊重 ``AgentError.retryable``：不可重试错误不得重派。"""
+
+    def test_不可重试AgentError不重派(self):
+        r = _make_router()
+        steps = _make_steps(1)
+        plan = _make_plan(steps)
+        calls = 0
+
+        def fn(step: Step) -> str:
+            nonlocal calls
+            calls += 1
+            raise permission_error("动作无对应工具", source="s", correlation_id="c")
+
+        result = r.route(plan, steps, executor_fn=fn)
+        assert calls == 1  # 只调用一次（未重派）
+        assert result.results["s1"].status == "failed"
+        assert result.results["s1"].retries == 0
+        assert "E_PERMISSION" in result.results["s1"].error
+        assert "s1" in result.pending_escalation
+
+    def test_可重试AgentError仍重派(self):
+        r = _make_router()
+        steps = _make_steps(1)
+        plan = _make_plan(steps)
+        calls = 0
+
+        def fn(step: Step) -> str:
+            nonlocal calls
+            calls += 1
+            raise timeout_error("超时", source="s", correlation_id="c")
+
+        result = r.route(plan, steps, executor_fn=fn)
+        assert calls == MAX_RETRIES + 1
+        assert result.results["s1"].status == "failed"
+        assert result.results["s1"].retries == MAX_RETRIES
+        assert "s1" in result.pending_escalation
+
+    def test_异常标注retryable为假时不重派(self):
+        """编排层在异常上标注 retryable=False（角色已判定确定性失败）→ 不重派。"""
+        r = _make_router()
+        steps = _make_steps(1)
+        plan = _make_plan(steps)
+        calls = 0
+
+        def fn(step: Step) -> str:
+            nonlocal calls
+            calls += 1
+            err = RuntimeError("角色已判定确定性失败")
+            err.retryable = False  # type: ignore[attr-defined]
+            raise err
+
+        result = r.route(plan, steps, executor_fn=fn)
+        assert calls == 1
+        assert result.results["s1"].status == "failed"
+        assert result.results["s1"].retries == 0
+        assert "s1" in result.pending_escalation

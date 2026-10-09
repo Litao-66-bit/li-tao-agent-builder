@@ -68,10 +68,13 @@ class Searcher:
     Attributes:
         correlation_id: 关联 ID（贯穿审计日志）。
         max_rounds: 最大搜索轮次。
+        llm_client: LLM 客户端（可选；由运行时密钥工厂注入）。
+            可用时用于关键词拆解，不可用时降级为原查询。
     """
 
     correlation_id: str = "c-unknown"
     max_rounds: int = MAX_ROUNDS
+    llm_client: Any = None
 
     def execute(
         self,
@@ -150,14 +153,41 @@ class Searcher:
             rounds=rounds,
         )
 
+    def _llm_ready(self) -> bool:
+        """LLM 客户端是否可用（鸭子类型判定，不依赖具体类型）。"""
+        return self.llm_client is not None and bool(getattr(self.llm_client, "is_available", False))
+
     def _expand_keywords(self, query: str) -> list[str]:
         """拆解检索需求为多路关键词（中英文各一路）。
 
-        当前实现为骨架：实际关键词拆解由 LLM 完成。
+        LLM 可用时由 LLM 拆解；不可用或拆解失败时降级为返回原查询。
         """
         if not query:
             return []
-        return [query]  # 骨架：返回原查询
+        if self._llm_ready():
+            keywords = self._llm_keywords(query)
+            if keywords:
+                return keywords
+        return [query]
+
+    def _llm_keywords(self, query: str) -> list[str]:
+        """调用 LLM 把查询拆成多路检索关键词；失败返回空列表（由调用方降级）。"""
+        schema = '{"keywords": ["关键词1", "关键词2"]}'
+        prompt = (
+            f"把下面的检索需求拆成多路检索关键词（中英文各至少一路）。\n"
+            f"需求：{query}\n"
+            f"只返回关键词列表，不要解释。"
+        )
+        try:
+            result = self.llm_client.complete_json(prompt, schema_hint=schema)
+        except Exception:  # noqa: BLE001  LLM 调用失败降级为原查询
+            return []
+        if not isinstance(result, dict):
+            return []
+        raw = result.get("keywords", [])
+        if not isinstance(raw, list):
+            return []
+        return [str(k).strip() for k in raw if str(k).strip()]
 
     def _parse_items(self, raw_items: list[dict[str, Any]]) -> list[SearchItem]:
         """解析检索结果清单。"""

@@ -27,6 +27,8 @@
 | `audit_log` | 写审计日志 | low |
 | `memory_read` | 读记忆/经验 | low |
 | `config_read` | 读架构配置 | low |
+| `council_check_opinion` | 校验评审会参会意见（结构 / 长度 / 注入清洗） | low |
+| `council_build_minutes` | 把评审会各方意见收敛为结构化纪要 | low |
 
 **边界声明**：不可直接写文件、提交代码、执行命令。只编排不执行。
 
@@ -265,7 +267,9 @@ decomposer 产出步骤 DAG 后调用。
 | 步骤失败 | 重派 1 次；仍失败 → 上报总指挥 |
 | 执行者超时 | 标记失败重派 |
 | 权限不足 | 转发审批门请求用户（pending_approval） |
-| 类型不明 | 默认派给 general_executor |
+| 不可重试错误（`AgentError.retryable=False`：E_PERMISSION / E_COST / E_INTERNAL / E_USER_CANCEL） | **不重派**，直接记为 failed 并上报总指挥（确定性失败，重派无意义） |
+| action 无对应工具（模型臆造工具） | 编排层在调用工具前拒绝：`E_VALIDATION`（`retryable=False`），报错附可用工具清单；不重派 |
+| 类型不明 | 默认派给 general_executor（执行函数仍会按「action 是否为已注册工具」把关） |
 | 无匹配执行者 | 上报总指挥 |
 
 #### 交接
@@ -303,6 +307,7 @@ decomposer 产出步骤 DAG 后调用。
 | `file_list` | 列目录结构 | low |
 | `code_search` | 搜索代码 | low |
 | `file_write` | 写/改代码 | **high**（需审批） |
+| `file_edit` | 局部修改代码（精确替换，避免整份重写） | **high**（需审批） |
 | `sandbox_run` | 沙箱自测 | low |
 | `memory_read` | 读上下文 | low |
 | `audit_log` | 写审计日志 | low |
@@ -369,6 +374,7 @@ decomposer 产出步骤 DAG 后调用。
 |---|---|---|
 | `file_read` | 读素材 | low |
 | `file_write` | 写文档 | **high**（需审批） |
+| `file_edit` | 局部修改文档（精确替换） | **high**（需审批） |
 | `web_fetch` | 抓取素材 | low |
 | `citation_check` | 校验来源 | low |
 | `memory_read` | 读记忆中的素材 | low |
@@ -560,29 +566,20 @@ decomposer 产出步骤 DAG 后调用。
 
 ### 实现说明
 
-**实现分两层**：
+**已实现**为 `agent_builder/tools/gatekeeper.py` 的 `ToolGatekeeper` 类。
 
-- **工具层（校验内核）**：`agent_builder/tools/gatekeeper.py` 的 `ToolGatekeeper` 类 —— 所有角色工具调用的唯一出口。
-- **角色层（Agent）**：`agent_builder/roles/tool_guardian.py` 的 `ToolGuardian` 类 —— 按本规范实现为可调度的 Agent，包装上述内核，并补齐注入预检、高风险转审批门与「结果 + 耗时」审计。
-
-核心校验流程（`ToolGatekeeper`）：
+核心校验流程：
 1. 角色权限校验（角色未注册 / 工具未列入白名单 → E_PERMISSION，永不重试）
-2. 高风险工具审批门（file_write / git_commit / rollback 需审批）
+2. 高风险工具审批门（file_write / file_edit / file_delete / git_commit / rollback 需审批）
 3. 文件类工具沙箱路径校验（realpath 必须在白名单目录内）
 4. 网络类工具 URL 安全校验（防 SSRF，禁私有网段）
 5. 写审计日志（谁调的、参数、结果、耗时）
-
-角色层执行协议（`ToolGuardian.guard`）：
-1. 注入预检：args 命中注入模式 → 拒绝 + 标记事件上报审计员
-2. 高风险动作且无审批人 → 转审批门（pending_approval）
-3. 白名单 + 参数安全：复用 `ToolGatekeeper`
-4. 放行后交给 executor_fn 执行，并写审计日志（谁调的、参数、结果、耗时）
 
 ### 校验分支
 
 | 校验类型 | 适用工具 | 方法 |
 |---|---|---|
-| 沙箱 path/repo_path | file_write, file_read, file_list, code_search, data_query, git_commit, rollback, git_log | `_check_sandbox_path` |
+| 沙箱 path/repo_path | file_write, file_edit, file_delete, file_read, file_list, code_search, data_query, git_commit, rollback, git_log | `_check_sandbox_path` |
 | 可选 path | sandbox_run | `_check_sandbox_path_optional` |
 | 混合 target | test_run | `_check_target_safety` |
 | URL 安全 | web_fetch, web_search | `_check_url_safety` |
@@ -1211,3 +1208,138 @@ decomposer 产出步骤 DAG 后调用。
 #### 完成标志
 
 变更日志 + 版本记录（含 diff 摘要，审批被拒也记录，冲突以时间戳为准）。
+
+---
+
+## 权限层角色（无独立实现模块）
+
+以下角色存在于 `agent_builder/tools/permissions.py` 的权限矩阵中、参与门卫放行，
+但**不设独立实现模块**：其能力由 tools 层的工具实现 + 既有角色组合承担。
+本节用于闭合「权限矩阵 20 个角色 vs `roles/` 17 个实现模块」的差异，避免条目悬空。
+
+---
+
+## Operator（操作者）
+
+### 角色规格
+
+| 属性 | 值 |
+|---|---|
+| 角色名 | `operator` |
+| 层级 | 权限层（无独立实现模块） |
+| 使命 | 通用操作者：覆盖工具层的读/搜/跑/查能力，供工具层集成与人工操作使用 |
+| 服务对象 | 工具层调用方 |
+| 触发时机 | 由调用方显式指定 |
+| 交付物 | 对应工具的结构化结果 |
+
+### 授权清单
+
+| 工具 | 用途 | 风险 |
+|---|---|---|
+| `file_read` | 读文件内容（UTF-8） | low |
+| `file_list` | 列目录 | low |
+| `code_search` | 代码内搜索（ripgrep） | low |
+| `file_write` | 覆盖文件（需审批） | medium |
+| `file_edit` | 局部修改文件（需审批） | medium |
+| `file_delete` | 删除文件（需审批） | high |
+| `web_fetch` | 抓取页面/文档 | low |
+| `web_search` | 网页搜索（DuckDuckGo IA） | low |
+| `citation_check` | 校验引用来源存在性 | low |
+| `sandbox_run` | 沙箱内执行命令 | medium |
+| `test_run` | 跑 pytest / 抓文档 | medium |
+| `data_query` | 读 CSV/JSON 数据 | low |
+| `plan_validate` | 校验步骤 DAG | low |
+| `memory_read` | 检索记忆 | low |
+| `audit_log` | 写审计日志 | low |
+| `metric_collect` | 采集运行指标 | low |
+| `config_read` | 读架构配置 | low |
+| `diff_preview` | 生成变更 diff 预览 | low |
+| `approval_request` | 发起审批请求 | low |
+| `change_notify` | 变更通知 | low |
+| `git_log` | 查询版本历史 | low |
+
+**边界声明**：通用操作者；覆盖类操作需审批。不具备版本提交与回滚权限，也不做计划编排。
+
+### 异常处理
+
+| 异常 | 处理路径 |
+|---|---|
+| 工具被门卫拒绝 | 返回 E_PERMISSION，不重试；由调用方决定是否申请审批 |
+| 工具执行失败 | 返回 E_TOOL/E_VALIDATION，记录审计；由调用方决定重试 |
+
+#### 完成标志
+
+工具返回结构化结果，或抛出契约异常（E_VALIDATION / E_TOOL / E_PERMISSION）。
+
+---
+
+## SubArchitect（副架构师）
+
+### 角色规格
+
+| 属性 | 值 |
+|---|---|
+| 角色名 | `sub_architect` |
+| 层级 | 权限层（无独立实现模块） |
+| 使命 | 版本治理：提交版本与回滚版本，均需审批 |
+| 服务对象 | 看门人 / 编排层 |
+| 触发时机 | 变更通过验证、需要入库或回退时 |
+| 交付物 | `committed <hash>` / `rolled back: <old8> -> <new8>` |
+
+### 授权清单
+
+| 工具 | 用途 | 风险 |
+|---|---|---|
+| `git_commit` | 提交版本（需审批） | high |
+| `rollback` | 回滚版本（需审批） | high |
+| `git_log` | 查询版本历史 | low |
+
+**边界声明**：版本治理专用；提交与回滚均需审批。不读写工作区文档内容，也不跑沙箱命令。
+
+### 异常处理
+
+| 异常 | 处理路径 |
+|---|---|
+| 缺少审批 | 门卫拒绝（E_PERMISSION），不动作 |
+| git 命令失败 | 返回 E_TOOL；不自动重试，交人工确认 |
+
+#### 完成标志
+
+版本记录落到 ChangeLog，或抛出契约异常。
+
+---
+
+## MemoryManager（记忆管家·权限层）
+
+### 角色规格
+
+| 属性 | 值 |
+|---|---|
+| 角色名 | `memory_manager` |
+| 层级 | 权限层（无独立实现模块） |
+| 使命 | 记忆治理：记忆的读写与清理；与 `memory_keeper` 同权，供记忆存储的独立治理入口 |
+| 服务对象 | 记忆存储 |
+| 触发时机 | 需要独立于执行链读写/清理记忆时 |
+| 交付物 | `stored <key> (...)` / 检索结果 / `forgot <N> entries` |
+
+### 授权清单
+
+| 工具 | 用途 | 风险 |
+|---|---|---|
+| `memory_read` | 检索记忆 | low |
+| `memory_write` | 写入记忆（敏感信息加密存储） | low |
+| `memory_forget` | 遗忘 / 清理过期记忆 | low |
+
+**边界声明**：记忆治理专用；敏感信息加密存储。仅覆盖记忆存储，不触及工作区与版本库。
+
+### 异常处理
+
+| 异常 | 处理路径 |
+|---|---|
+| 检索无结果 | 返回"无记录"，不编造 |
+| 存储读写失败 | 返回 E_TOOL；不做静默丢弃 |
+
+#### 完成标志
+
+记忆存储完成读写或清理，并返回结构化结果；失败抛契约异常。
+

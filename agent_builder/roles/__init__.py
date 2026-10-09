@@ -17,7 +17,6 @@ from agent_builder.roles.scheduler import Scheduler
 from agent_builder.roles.searcher import Searcher
 from agent_builder.roles.summarizer import Summarizer
 from agent_builder.roles.test_runner import TestRunner
-from agent_builder.roles.tool_guardian import ToolGuardian
 
 __all__ = [
     "Auditor",
@@ -37,5 +36,4 @@ __all__ = [
     "Searcher",
     "Summarizer",
     "TestRunner",
-    "ToolGuardian",
 ]
