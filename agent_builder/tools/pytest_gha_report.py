@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 
-def pytest_runtest_logreport(report):  # noqa: ANN001, ANN201
+def pytest_runtest_logreport(report):
     """任一阶段失败 → 打一条 GitHub Actions 注解（日志里表现为 error annotation）。"""
     if not report.failed:
         return
@@ -22,7 +22,7 @@ def pytest_runtest_logreport(report):  # noqa: ANN001, ANN201
     print(f"::error file={path}::{report.nodeid} :: {detail}")
 
 
-def pytest_terminal_summary(terminalreporter):  # noqa: ANN001, ANN201
+def pytest_terminal_summary(terminalreporter):
     """末尾再打一条汇总注解（连收集错误一起计数，便于确认是否还有遗漏）。"""
     stats = terminalreporter.stats
     failed = len(stats.get("failed", []))
