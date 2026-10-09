@@ -17,7 +17,8 @@
 > 修完跑出**首轮真正收敛**（12 步、测试 5 项通过、沙箱实跑成功，连续重复轮次 6 → 0）—— 详见「今日完成（2026-10-08）」下的「续：同日第二轮实测」小节。
 > 基线 **2033 → 2077 passed / 11 skipped**。
 >
-> **未推送提醒**：本地 `main` 相对远端 `origin/main` **ahead 6**，全部未推送。本地**已有 `.git`**
+> **未推送提醒**：本地 `main` 有 **6 个代码提交 + 后续 docs 提交**尚未推送（**具体数量以
+> `git rev-list --count origin/main..HEAD` 为准**，别抄这里写死的数字）。本地**已有 `.git`**
 > （站在远端 HEAD 上，推送是快进、远端独有文件自动保留），**不再需要 REST API**。
 > 最新状态见「今日完成（2026-10-09 晚 · 第二轮）」一节。
 
@@ -437,7 +438,12 @@ test_run 本机跑不通（改用 sys.executable -m pytest）、
 ## 基础运行环境
 
 - **操作系统**：Windows + PowerShell
-- **项目根目录**：`c:\Users\李陶\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\work-mode-projects\6abcee34807a00aa83da2398`
+- **工作副本（项目根）**：`C:\agent\li-tao-agent-builder`（**2026-10-09 晚起**）
+  - 旧副本 `c:\Users\李陶\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\work-mode-projects\6abcee34807a00aa83da2398`
+    只当**备份**，**不要再改**。
+  - ⚠️ 它自己也有一份 `.git` 与 `frontend/`，历史上服务就是从那里起的 —— **起服务前先确认是从工作副本起的**，
+    否则前端会加载旧 `app.js`（改动"看不到"）、后端 `/projects` 回的 `workspace_dir` 也指向旧目录。
+  - 依赖（`.deps/`）、产物（`outputs/`）、临时（`.dsh-scratch/`）都还在旧副本里有一份，别混淆。
 - **Python**：`"$env:USERPROFILE\AppData\Local\Programs\Python\Python314\python.exe"`（3.14），ruff 0.16.9
 - **依赖装法**：沙箱禁止写解释器 `site-packages` 的 `Scripts\*.exe`，故用 `pip install --target .deps` + 启动时 `PYTHONPATH=.deps`；`pyproject.toml` 的 ruff 已 `exclude = [".deps", "_sample_backup"]`（后者是实测产物草稿目录，非项目源码）
 - **后端**：FastAPI + uvicorn，端口 **8000**；CORS 白名单**仅** `http://127.0.0.1:8080`（换端口会被 CORS 拦，本会话验证时踩过）
@@ -531,8 +537,10 @@ node --check frontend/js/app.js
 
 ## 未推送状态
 
-- **当前状态（2026-10-09 晚 · 第二轮收工）**：`main` = **`1ad2488`**，相对远端 `origin/main`（`3608e0a`）
-  **ahead 6**，全部**未推送**。本地**已有 `.git`**（站在远端 HEAD 上 → 推送是**快进**，远端独有文件自动保留）：
+- **当前状态（2026-10-09 晚 · 第二轮收工）**：**最后一个代码提交** = **`1ad2488`**（其后只追加 docs 提交）；
+  相对远端 `origin/main`（`3608e0a`）**尚未推送** —— 具体 ahead 数量以
+  `git rev-list --count origin/main..HEAD` 为准（**别抄写死的数字**，docs 提交会让它继续增长）。
+  本地**已有 `.git`**（站在远端 HEAD 上 → 推送是**快进**，远端独有文件自动保留）：
   `ba06b08`（前端：助手消息复制 / 工具卡代码卡 / 重新生成 / 空态与思考中）、
   `505f07a`（test_run 按工作区解析 target —— 修「假绿」）、
   `c5236c0`（前端：结论色调跟状态走 / 产物行顺序 / 任务徽章）、
