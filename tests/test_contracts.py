@@ -32,7 +32,6 @@ from agent_builder.contracts.schemas import (
     ToolCall,
 )
 from agent_builder.contracts.state_machine import (
-    MAX_RETRY,
     TaskEvent,
     TaskStatus,
     TransitionError,
