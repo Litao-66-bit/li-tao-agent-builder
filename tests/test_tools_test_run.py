@@ -428,6 +428,54 @@ class TestTarget按工作区解析:
         assert "1 passed" in out
 
 
+class TestSubprocessEncoding:
+    """回归（本次验证时实测被绊倒）：``subprocess.run(text=True)`` 不指定编码时，读线程按
+    **本地编码**（中文 Windows 是 gbk）解码子进程输出。子进程若写 UTF-8
+    （``PYTHONIOENCODING=utf-8`` / ``PYTHONUTF8=1``，开发机上很常见），解码即抛
+    ``UnicodeDecodeError`` → ``proc.stdout`` 变成 **None** → ``len(output)`` 抛
+    ``TypeError: object of type 'NoneType' has no len()`` —— 整个 test_run **崩掉**，
+    而不是给出输出（函数签名也变成了"可能返回 None"）。
+
+    修法：读侧显式 ``encoding="utf-8", errors="replace"``，写侧在 ``_child_env()`` 里固定
+    ``PYTHONIOENCODING=utf-8``，两侧成对锁死。
+    """
+
+    def test_子进程写UTF8时仍能取到输出(self, monkeypatch, tmp_path):
+        import agent_builder.tools.impl.test_run as tr
+        from agent_builder.tools.gatekeeper import current_workspace_dir
+
+        # 正是实测的触发条件：父进程环境带 PYTHONIOENCODING=utf-8 → 子进程输出 UTF-8
+        monkeypatch.setenv("PYTHONIOENCODING", "utf-8")
+
+        outputs = tmp_path / "outputs"
+        outputs.mkdir()
+        (outputs / "test_cn.py").write_text(
+            "def test_cn():\n    print('中文输出-复现')\n    assert False\n",
+            encoding="utf-8",
+        )
+        token = current_workspace_dir.set(tmp_path)
+        try:
+            out = tr._run_pytest("outputs/test_cn.py", 60.0, "c-test")
+        finally:
+            current_workspace_dir.reset(token)
+
+        assert "1 failed" in out
+        # 中文须经 UTF-8 完整往返；编码不匹配时这里根本走不到（上面先抛 TypeError）
+        assert "中文输出-复现" in out
+
+    def test_子进程环境固定UTF8(self, tmp_path):
+        import agent_builder.tools.impl.test_run as tr
+        from agent_builder.tools.gatekeeper import current_workspace_dir
+
+        token = current_workspace_dir.set(tmp_path)
+        try:
+            env = tr._child_env()
+        finally:
+            current_workspace_dir.reset(token)
+
+        assert env["PYTHONIOENCODING"] == "utf-8"
+
+
 class Test执行对象可审计与越界拒绝:
     """卡2：报告的每一环都要能核对「到底跑了哪个文件」；越界 target 工具层自己就拒。
 

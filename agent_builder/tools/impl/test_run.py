@@ -51,8 +51,13 @@ def _pytest_argv(path: str) -> list[str]:
 
 
 def _child_env() -> dict[str, str]:
-    """子进程环境：临时目录必须在工作区内可写；受限环境下再注入兼容插件所需变量。"""
+    """子进程环境：临时目录必须在工作区内可写；受限环境下再注入兼容插件所需变量。
+
+    另外**强制子进程用 UTF-8 写 stdout/stderr** —— 见 ``_run_pytest`` 里读侧的说明：
+    两侧编码必须成对锁死，否则中文测试输出会踩本地编码（GBK）解码失败。
+    """
     env = workspace_temp_env(dict(os.environ))
+    env["PYTHONIOENCODING"] = "utf-8"
     if os.name == "nt" and _tmpfix_available():
         env["PYTHONPATH"] = str(APP_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
         root = workspace_temp_dir() / "pytest"
@@ -165,7 +170,14 @@ def _run_pytest(path: str, timeout: float, cid: str) -> str:
             _pytest_argv(str(target)),
             cwd=str(workspace),
             capture_output=True,
-            text=True,
+            # **必须显式指定编码**：只用 text=True 时会按**本地编码**（中文 Windows 是 gbk）
+            # 解码子进程输出。子进程若写 UTF-8（PYTHONIOENCODING=utf-8 / PYTHONUTF8=1），
+            # 读线程就抛 UnicodeDecodeError，于是 ``proc.stdout`` 变成 **None** ——
+            # 接着 ``len(output)`` 抛 TypeError，整个 test_run 崩掉（而不是给出输出）。
+            # 实测触发条件：父进程环境里带 PYTHONIOENCODING=utf-8 即可复现。
+            # 读侧固定 utf-8 + errors=replace，写侧由 _child_env() 固定 UTF-8，两侧成对锁死。
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
             # 子进程的临时目录必须在**工作区内可写**，否则被测代码里凡是用 tmp_path /
