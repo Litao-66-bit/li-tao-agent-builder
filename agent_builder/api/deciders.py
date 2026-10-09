@@ -497,13 +497,19 @@ def build_decision_prompt(
             "同一文件读完一次（必要时用 start_line/end_line 分段）就必须给出动作（写 / 改 / 跑）"
             "—— 实测：工作区已有实现时模型连读 7 步、一步没写，把预算烧在「复用还是重写」的犹豫上。"
         ),
+        (
+            "11. **新产出的交付物统一放在 `outputs/` 下**（例如 `outputs/paper_agent.py`、"
+            "`outputs/paper_agent/test_agent.py`）：这样 agent 的产出不会污染仓库根，"
+            "也不会被 lint / 测试扫描到。**只有修改工作区里已有的文件**时才写回它原来的路径"
+            "（例如把仓库里那份 `paper_agent.py` 的签名改对）。"
+        ),
     ]
     if context.allow_propose:
         # 只在门控开启时教这个能力 —— 关闭时教它等于鼓励模型去撞校验。
         lines.extend(
             [
                 (
-                    "11. 若现有角色确实做不到某件事，可用 kind=propose 提议**一个新角色**"
+                    "12. 若现有角色确实做不到某件事，可用 kind=propose 提议**一个新角色**"
                     "（只接受 target=role）："
                 ),
                 (

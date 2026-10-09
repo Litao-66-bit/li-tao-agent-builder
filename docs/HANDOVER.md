@@ -348,6 +348,9 @@ test_run 本机跑不通（改用 sys.executable -m pytest）、
 - **跨平台换行**：写盘不做平台翻译；读取/匹配要容忍 LF↔CRLF。**测试样本也要按平台给**（实测：`C:/Windows/evil.py` 在 POSIX 上并未越界 → CI 失败）。
 - **可选外部依赖必须有兜底**：`rg`（`code_search`）、临时目录权限（`test_run`）都在这一条上翻过车。
 - **人话文案有一致性测试**：新增动作要补中文名（`narrate.ACTION_TITLES`）与人话化分支，否则摘要会漏出英文机器输出。
+- **产物要落 `outputs/`**：工作区常常就是本项目仓库根 —— **新**交付物统一放 `<工作区>/outputs/`（**改已有文件仍写回原路径**），
+  并且 `pyproject.toml` 的 `[tool.ruff] exclude` 与 `testpaths = ["tests"]` 已把产物排除出 lint / 测试范围
+  （实测动机：agent 写出的 `paper_agent.py` 会让本地 `ruff check .` 直接失败）。详见 `docs/agentic-loop-design.md` §13。
 
 ### 验证方法（**这一段最值得复用**）
 

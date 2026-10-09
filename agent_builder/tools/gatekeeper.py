@@ -58,6 +58,29 @@ def workspace_temp_env(env: dict[str, str]) -> dict[str, str]:
     return env
 
 
+# 产物输出根目录的名字：**新产出的交付物**统一落在这里。
+#
+# 为什么需要这条策略（实测）：工作区常常**就是本项目仓库根**（默认工作区即项目目录），
+# 于是 agent 写出的 `paper_agent.py` / `test_paper_agent.py` 直接躺在仓库根 —— 本地
+# `ruff check .` 会被它们扫到并报错（实测 RUF022），CI 里也容易被 pytest 收集。
+# 约定一个新产物落到 `outputs/` 下，就从根上避免"agent 的产出污染项目本身"。
+#
+# 注意这是**策略而非沙箱规则**：工具层不做拦截 —— **修改工作区已有文件**时仍应写回原路径
+# （例如把仓库里那份 `paper_agent.py` 的签名改对），只有**新建**的交付物才放 `outputs/`。
+OUTPUT_ROOT_DIRNAME = "outputs"
+
+
+def output_root(base: Path | None = None) -> Path:
+    """本次任务的产物输出根目录（工作区下的 ``outputs/``；不存在则创建）。"""
+    root = base if base is not None else (current_workspace_dir.get() or Path.cwd())
+    target = Path(root) / OUTPUT_ROOT_DIRNAME
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return Path(root)  # 建不出来就退回工作区根：至少是可写的
+    return target
+
+
 def resolve_in_workspace(path: str | Path, base: Path | None = None) -> Path:
     """把工具路径解析到**沙箱基准**下：相对路径按工作区解析，而不是按进程 cwd。
 
@@ -293,9 +316,11 @@ class ToolGatekeeper:
 
 
 __all__ = [
+    "OUTPUT_ROOT_DIRNAME",
     "WORKSPACE_DIR",
     "ToolAudit",
     "ToolGatekeeper",
     "current_workspace_dir",
+    "output_root",
     "resolve_in_workspace",
 ]

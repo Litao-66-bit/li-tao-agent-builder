@@ -36,7 +36,9 @@ target-version = "py310"
 # 同样不是项目源码 —— 把它排除，免得每跑一轮都要为了迁就 lint 去改被测方的产出。
 # .dsh-scratch 是本机 DSH 插件事故的现场目录（含回滚备份与一个临时验证用 shim），
 # 已被 .gitignore 忽略，同样不是项目源码。
-exclude = [".deps", "_sample_backup", ".dsh-scratch"]
+# agent 产物输出根目录（outputs/，见 agent_builder/tools/gatekeeper.py: OUTPUT_ROOT_DIRNAME）
+# 也排除：agent 自己写出来的代码不是项目源码，不该拿项目的 lint 规则去要求它。
+exclude = [".deps", "_sample_backup", ".dsh-scratch", "outputs"]
 
 [tool.ruff.lint.per-file-ignores]
 "agent_builder/api/routes.py" = ["B008"]  # FastAPI Depends() 在默认参数中是标准模式

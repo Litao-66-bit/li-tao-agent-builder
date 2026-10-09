@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -27,6 +28,49 @@ class TestNotice:
             assert f"{dep}==" in lock, f"requirements.lock 缺少直接依赖 {dep}"
         # 只允许注释里出现历史提及（如 `# via langgraph`），不允许再**锁定** langgraph 包。
         assert "\nlanggraph" not in "\n" + lock, "requirements.lock 仍在锁定 langgraph"
+
+
+class TestOutputRootPolicy:
+    """产物输出根目录策略：**新**交付物落 `outputs/`，且不被 lint / 测试扫描。
+
+    动机（实测）：工作区常常就是本项目仓库根，agent 写出的 `paper_agent.py` 之类直接躺在根目录，
+    本地 `ruff check .` 会被它扫到并报错（RUF022），也容易被 pytest 收集。
+    策略本身 = 一条约定（写进决策提示词）+ 两处**确定性扫描范围**，这里把后者钉住，
+    免得日后被无意改回去。
+    """
+
+    def test_常量与约定的目录名一致(self):
+        from agent_builder.tools.gatekeeper import OUTPUT_ROOT_DIRNAME
+
+        assert OUTPUT_ROOT_DIRNAME == "outputs"
+
+    def test_output_root_会解析到工作区下并建好目录(self, tmp_path):
+        from agent_builder.tools.gatekeeper import current_workspace_dir, output_root
+
+        token = current_workspace_dir.set(tmp_path)
+        try:
+            target = output_root()
+        finally:
+            current_workspace_dir.reset(token)
+
+        assert target == tmp_path / "outputs"
+        assert target.is_dir()
+
+    def test_ruff_排除产物目录(self):
+        text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        match = re.search(r"exclude = \[(.*?)\]", text, re.DOTALL)
+        assert match is not None, "pyproject.toml 里找不到 [tool.ruff] exclude"
+        assert "outputs" in match.group(1), "ruff 未排除产物目录 outputs"
+
+    def test_pytest_只收集_tests(self):
+        """根目录下的 agent 产物（如 test_paper_agent.py）不该被 CI 收集。"""
+        text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        match = re.search(r"testpaths = \[(.*?)\]", text, re.DOTALL)
+        assert match is not None, "pyproject.toml 里找不到 testpaths"
+        assert match.group(1).strip() == '"tests"'
+
+    def test_gitignore_忽略产物目录(self):
+        assert "outputs/" in (ROOT / ".gitignore").read_text(encoding="utf-8")
 
 
 class TestSecurity:

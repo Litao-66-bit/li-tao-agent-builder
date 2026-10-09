@@ -268,7 +268,28 @@ while not 终止:
 1. **任务集**：4 个真实需求（含「调研论文 agent」主任务 R1），2 档 × 3 次；产物一律写工作区独占目录 `_mode_ab_out/`。
 2. **评价口径**：只用**运行时指标**、不新增 agentic 专有维度 —— **P0 质量**（完成率 / 失败步骤 / 返工）优先于 **P1 成本**（token / 循环轮数）。`scorecards.py` 是**角色静态评分**（契约/权限/实现三方一致），与运行时 A/B 不同源，故未复用。
 
-## 13. 校验命令（改动后必须全绿）
+## 13. 产物输出根目录策略（2026-10 新增）
+
+**问题（实测）**：工作区常常**就是本项目仓库根**（默认工作区即项目目录），于是 agent 写出的
+`paper_agent.py` / `test_paper_agent.py` 直接躺在仓库根 —— 本地 `ruff check .` 会被它们扫到并报错
+（实测 RUF022），也容易被 pytest 收集。
+
+**策略**：**新产出的交付物统一落 `<工作区>/outputs/`**；**修改工作区里已有的文件**时仍写回它原来的路径
+（例如把仓库里那份 `paper_agent.py` 的签名改对）。这是**策略而非沙箱规则** —— 工具层不拦截，
+因为"改已有文件"与"新建交付物"必须区分对待。
+
+**落点（四处，缺一不可）**：
+
+1. **约定常量**：`agent_builder/tools/gatekeeper.py: OUTPUT_ROOT_DIRNAME` + `output_root()`（工作区下的 `outputs/`，不存在则建）；
+2. **模型侧**：决策提示词规则 11（`api/deciders.py`）—— 明确"新产物放 `outputs/`、改已有文件写回原路径"；
+3. **lint 范围**：`pyproject.toml` 的 `[tool.ruff] exclude` 增加 `outputs`；
+4. **测试/版本范围**：`[tool.pytest.ini_options] testpaths = ["tests"]`（根目录的 agent 产物不会被收集）
+   与 `.gitignore` 的 `outputs/`。
+
+**测试**：`tests/test_p2.py::TestOutputRootPolicy`（钉住常量、`output_root()`、两处扫描范围与 `.gitignore`）
++ `tests/test_deciders.py::test_提示词要求新产物落_outputs`。
+
+## 14. 校验命令（改动后必须全绿）
 
 ```powershell
 $env:PYTHONPATH = ".deps"

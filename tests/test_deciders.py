@@ -261,6 +261,17 @@ class TestBuildDecisionPrompt:
         assert "不得提议" in closed
         assert "auditor" not in closed
 
+    def test_提示词要求新产物落_outputs(self) -> None:
+        """产物输出根目录策略（实测动机：工作区常就是仓库根，agent 产出会污染 lint/测试范围）。
+
+        注意规则同时给了**例外**：修改工作区已有文件时应写回原路径 —— 否则模型会不敢改
+        `paper_agent.py` 这类既有实现。
+        """
+        prompt = build_decision_prompt(_context())
+
+        assert "outputs/" in prompt
+        assert "修改工作区里已有的文件" in prompt
+
     def test_系统纠正写进提示词(self) -> None:
         """循环检测到「连续只读 + 验证仍失败」时，会把纠正文案塞进提示词（不靠模型自觉）。"""
         assert "【系统纠正】" not in build_decision_prompt(_context())

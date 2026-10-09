@@ -39,6 +39,9 @@ data/*.json.tmp
 .agent-audit/
 .agent-tmp/
 
+# agent 产物输出根目录（见 agent_builder/tools/gatekeeper.py: OUTPUT_ROOT_DIRNAME）
+outputs/
+
 # DSH 插件启用的沙箱与回滚备份（含本机绝对路径，绝不入库）
 .dsh-scratch/
 
