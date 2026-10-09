@@ -541,13 +541,16 @@ body {
 /* 破坏性确认按钮（删除类）：实心危险色，与主操作的品牌渐变明确区分 */
 .key-btn.key-btn-destructive { background: var(--danger); border-color: transparent; color: var(--on-emphasis); font-weight: 600; }
 .key-btn.key-btn-destructive:hover { background: var(--danger); opacity: .9; }
-/* 确认对话框正文：普通字体、可换行（.project-dialog-hint 是等宽+单行省略，不适用） */
+/* 确认对话框正文：普通字体、可换行（.project-dialog-hint 是等宽+单行省略，不适用）。
+ * pre-line：尊重文案里的显式换行（「重新生成」会回显需求，一整段挤成一行很难读），
+ * 同时仍然按容器宽度自动折行。 */
 .confirm-message {
   margin: 10px 0 0;
   font-size: 12px;
   line-height: 1.6;
   color: var(--text);
   word-break: break-word;
+  white-space: pre-line;
 }
 
 /* ── 中栏对话区 ──
@@ -572,9 +575,77 @@ body {
   font-size: 11px;
   padding: 2px 8px;
 }
+/* 空态引导：对话区还没有任何内容时顶替消息列。
+ * 刻意**不加** .chat-item —— 它不参与对话裁剪计数（trimChatArea 只数 .chat-item）。 */
+.chat-empty {
+  align-self: center;
+  max-width: 520px;
+  margin: 6vh auto 0;
+  padding: 18px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  background: var(--bg-surface-2);
+  text-align: center;
+}
+.chat-empty-icon { font-size: 26px; line-height: 1; }
+.chat-empty-title { margin-top: 8px; font-size: 14px; font-weight: 700; color: var(--text-strong); }
+.chat-empty-hint { margin-top: 4px; font-size: 12px; color: var(--text-muted); }
+.chat-empty-tips {
+  display: inline-block;
+  margin: 12px auto 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.chat-empty-tips li { margin: 4px 0; line-height: 1.6; }
+.chat-empty-tips code {
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+/* 「思考中」指示条：三种阻塞调用（/chat /plan /run /resume）在途时给出"还在跑"的反馈。
+ * 同样不是 .chat-item：它不占裁剪名额，且刷新后不会留下一条假的会话记录。 */
+.chat-thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-surface-2);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.thinking-dots { display: inline-flex; gap: 3px; }
+.thinking-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: thinking-bounce 1.2s infinite ease-in-out;
+}
+.thinking-dots i:nth-child(2) { animation-delay: .15s; }
+.thinking-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes thinking-bounce {
+  0%, 80%, 100% { opacity: .25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-3px); }
+}
+/* 尊重系统「减少动态效果」偏好：不动画，保持静态可见。 */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-dots i { animation: none; opacity: .6; }
+}
+/* 消息容器是**纵向**弹性列：工具条要落在气泡下方，而不是被挤到气泡右侧。
+ * 左右对齐由 align-items 负责（flex-end = 用户消息靠右）。 */
 .msg-user {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-end;
 }
 .msg-user .bubble {
   background: var(--btn-grad);
@@ -585,7 +656,8 @@ body {
 }
 .msg-agent {
   display: flex;
-  justify-content: flex-start;
+  flex-direction: column;
+  align-items: flex-start;
 }
 .msg-agent .bubble {
   background: var(--bg-surface-2);
@@ -598,9 +670,10 @@ body {
 /* Markdown 正文（标题 / 表格 / 代码块）在窄气泡里会挤 → 助手回答整宽，与 DeepSeek 网页版一致。 */
 .msg-agent .bubble.md { max-width: 100%; }
 
-/* 消息级工具条（结论区的「复制」）：默认低调，hover 才亮 */
+/* 消息级工具条（助手消息的「复制」+ 结论区的「重新生成」）：默认低调，hover 才亮 */
 .msg-tools { display: flex; gap: 8px; margin-top: 6px; }
-.msg-copy {
+.msg-copy,
+.msg-regen {
   font-size: 11px;
   padding: 1px 8px;
   border-radius: 6px;
@@ -609,7 +682,8 @@ body {
   color: var(--text-muted);
   cursor: pointer;
 }
-.msg-copy:hover { color: var(--accent); border-color: var(--accent); }
+.msg-copy:hover,
+.msg-regen:hover { color: var(--accent); border-color: var(--accent); }
 
 /* 工具调用卡片 */
 .tool-card {
@@ -1643,6 +1717,15 @@ body {
   padding: 0;
   font-size: 12px;
   line-height: 1.55;
+}
+/* 工具卡里的代码块复用正文同一张 .md-code 卡片 → 抵消 .tool-code 对 pre 的旧样式
+ * （背景 / 边框 / 圆角），否则会套出双层边框。特异性更高，故能压过上面两条。 */
+.tool-code .md-code pre {
+  margin: 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 0;
+  background: none;
 }
 
 /* ══════════ 副结构提议卡（等扩编决定）══════════ */

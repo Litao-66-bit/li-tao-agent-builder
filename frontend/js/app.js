@@ -113,11 +113,24 @@ function statusLabel(status) {
   return STATUS_LABELS[status] || status || '未知';
 }
 
+/** 从 ``` 围栏文本中提取代码块：返回 `{ lang, code }`，无围栏返回 null。
+ *
+ * 与 `extractCodeBlock` 只差一点：**保留语言标签**。旧实现把围栏后的整行丢掉，
+ * 于是工具卡的代码块永远显示不出 `python` / `json` 这类标签，与正文观感不一致。
+ */
+function extractCodeFence(text) {
+  if (!text || typeof text !== 'string') return null;
+  const match = text.match(/```[ \t]*([^\n]*)\n([\s\S]*?)```/);
+  if (!match) return null;
+  // 围栏后的整行都算 info string（可能是 "python title=..."）→ 只取第一个词当语言。
+  const info = (match[1] || '').trim();
+  return { lang: info ? info.split(/\s+/)[0] : '', code: match[2].replace(/\s+$/, '') };
+}
+
 /** 从 ``` 围栏文本中提取代码（无围栏返回空串）。 */
 function extractCodeBlock(text) {
-  if (!text || typeof text !== 'string') return '';
-  const match = text.match(/```[^\n]*\n([\s\S]*?)```/);
-  return match ? match[1].replace(/\s+$/, '') : '';
+  const fence = extractCodeFence(text);
+  return fence ? fence.code : '';
 }
 
 /** 输入摘要：优先后端下发的人读描述（方案 A 的 `description`）。
@@ -265,7 +278,67 @@ function scrollChatToBottom(force) {
 function mountChatNode(node) {
   const log = document.getElementById('chatLog');
   log.appendChild(node);
+  // 「思考中」指示条始终压在最后：它标记的是"还在等结果"的位置。
+  if (thinkingEl && thinkingEl.isConnected) log.appendChild(thinkingEl);
+  refreshChatEmpty();
   scrollChatToBottom(false);
+}
+
+/** 空态引导：对话区还没有任何内容时顶替消息列（**不是** chat-item，不占裁剪名额）。 */
+function refreshChatEmpty() {
+  const log = document.getElementById('chatLog');
+  if (!log) return;
+  const empty = log.querySelector(':scope > .chat-empty');
+  // 「思考中」在途时不显示空态：否则会同时给出"等你输入"和"正在思考"两种相反暗示。
+  const shouldShow = !log.querySelector(':scope > .chat-item')
+    && !log.querySelector(':scope > .chat-thinking');
+  if (shouldShow && !empty) {
+    const box = document.createElement('div');
+    box.className = 'chat-empty';
+    box.innerHTML = `
+      <div class="chat-empty-icon" aria-hidden="true">🧭</div>
+      <div class="chat-empty-title">描述你的需求，我把它做成 Agent</div>
+      <div class="chat-empty-hint">例如「帮我做一个论文调研 agent」 · Enter 发送 / Shift+Enter 换行</div>
+      <ul class="chat-empty-tips">
+        <li>新产物统一落在工作区 <code>outputs/</code>，不污染仓库根</li>
+        <li>高风险写 / 删动作会「到点暂停」，等你放行后再执行</li>
+        <li>跑完给一句人话结论，可复制原始 Markdown</li>
+      </ul>`;
+    log.appendChild(box);
+  } else if (!shouldShow && empty) {
+    empty.remove();
+  }
+}
+
+/** 显示 / 更新「思考中」指示条。
+ *
+ * 为什么需要它：`/run`、`/resume` 都是**同步阻塞**接口（结论只在收尾那一轮产生），
+ * 执行期间界面没有任何新节点，看起来像卡死了。这里给出"还在跑"的可见反馈。
+ * **必须**在 finally 里调 `hideThinking()`，否则指示条会一直转。
+ */
+function showThinking(label) {
+  const log = document.getElementById('chatLog');
+  if (!log) return;
+  if (!thinkingEl || !thinkingEl.isConnected) {
+    thinkingEl = document.createElement('div');
+    thinkingEl.className = 'chat-thinking';
+    thinkingEl.setAttribute('role', 'status');
+    thinkingEl.innerHTML = '<span class="thinking-dots" aria-hidden="true">'
+      + '<i></i><i></i><i></i></span><span class="thinking-text"></span>';
+    log.appendChild(thinkingEl);
+  }
+  thinkingEl.querySelector('.thinking-text').textContent = label || '思考中…';
+  refreshChatEmpty();
+  scrollChatToBottom(true);
+}
+
+/** 收掉「思考中」指示条（幂等：没显示时调用无副作用）。 */
+function hideThinking() {
+  if (thinkingEl) {
+    thinkingEl.remove();
+    thinkingEl = null;
+  }
+  refreshChatEmpty();
 }
 
 /* ──────────────── 过程块：默认收起的过程收纳 ──────────────── */
@@ -275,6 +348,9 @@ let currentProcessBlock = null;
 
 /** 当前结论块（一个任务只保留一条，避免每轮刷新叠出一堆结论）。 */
 let conclusionBlockEl = null;
+
+/** 「思考中」指示条（**不是** chat-item，不占对话裁剪名额；请求在途时显示，收尾即移除）。 */
+let thinkingEl = null;
 
 /** 最近一次用于刷新过程块的任务快照。
  *
@@ -480,8 +556,10 @@ function resetActiveView() {
   currentStopReason = '';
   conclusionBlockEl = null;
   lastProcessTask = null;
+  thinkingEl = null;
   const log = document.getElementById('chatLog');
   if (log) log.innerHTML = '';
+  refreshChatEmpty();
   const actionSlot = document.getElementById('actionSlot');
   if (actionSlot) actionSlot.innerHTML = '';
   renderPlanBlock(null);
@@ -955,6 +1033,20 @@ function mdInline(escaped) {
     );
 }
 
+/** 代码卡 HTML：语言标签 + 「复制」按钮。``escapedCode`` 必须是**已转义**文本。
+ *
+ * 抽出来是为了让**工具卡**与正文（`renderMarkdown`）共用同一张卡 ——
+ * 此前工具卡走的是另一套 `.tool-code` 结构：没有语言标签、也没有复制按钮。
+ */
+function mdCodeCardHtml(lang, escapedCode) {
+  return '<div class="md-code">'
+    + '<div class="md-code-head">'
+    + `<span class="md-code-lang">${escapeHtml(lang || 'text')}</span>`
+    + '<button type="button" class="md-copy">复制</button>'
+    + '</div>'
+    + `<pre><code>${escapedCode}</code></pre></div>`;
+}
+
 /** 把模型写的 Markdown **子集**渲染成 HTML（助手消息 / 结论区）。
  *
  * 为什么自己写：本项目前端**零构建、零第三方库**，而模型结论实际用到的语法就这几样
@@ -996,12 +1088,7 @@ function renderMarkdown(text) {
         i += 1;
       }
       i += 1; // 跳过收尾围栏
-      out.push(
-        '<div class="md-code">'
-          + `<div class="md-code-head"><span class="md-code-lang">${fence[1] || 'text'}</span>`
-          + '<button type="button" class="md-copy">复制</button></div>'
-          + `<pre><code>${code.join('\n')}</code></pre></div>`,
-      );
+      out.push(mdCodeCardHtml(fence[1], code.join('\n')));
       continue;
     }
 
@@ -1102,6 +1189,29 @@ function renderMarkdown(text) {
 
 /* ──────────────── 对话渲染 ──────────────── */
 
+/** 消息级工具条（助手消息的「复制」；结论区再带一个「重新生成」）。
+ *
+ * 挂在 `.chat-item` 上、而不是气泡里：气泡宽度受限，工具条要与正文左对齐。
+ */
+function buildMsgTools(options) {
+  const tools = document.createElement('div');
+  tools.className = 'msg-tools';
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'msg-copy';
+  copyBtn.textContent = '复制';
+  tools.appendChild(copyBtn);
+  if (options && options.regen) {
+    const regenBtn = document.createElement('button');
+    regenBtn.type = 'button';
+    regenBtn.className = 'msg-regen';
+    regenBtn.textContent = '重新生成';
+    regenBtn.title = '用同一条需求新建任务并重新执行一遍';
+    tools.appendChild(regenBtn);
+  }
+  return tools;
+}
+
 /** 渲染一条消息气泡（只渲染，不写会话记录）。 */
 function renderMessage(role, text) {
   const wrap = document.createElement('div');
@@ -1117,6 +1227,12 @@ function renderMessage(role, text) {
     bubble.innerHTML = renderMarkdown(text);
   }
   wrap.appendChild(bubble);
+  // 助手的普通消息也带「复制」，同样复制**原始 Markdown**（渲染后取 textContent 会丢
+  // 列表/表格的换行结构）。原文挂在容器上，与结论区同一个约定：复制时找最近的 [data-raw]。
+  if (role !== 'user' && String(text == null ? '' : text).trim()) {
+    wrap.dataset.raw = String(text);
+    wrap.appendChild(buildMsgTools());
+  }
   mountChatNode(wrap);
 }
 
@@ -1145,12 +1261,15 @@ function renderToolCard(title, status, detail, extra) {
   // 这一轮「为什么这么做」（agentic 的决策理由）：思考同样收进过程块，
   // 否则它既不在正文、也不在过程里，等于被丢掉。
   const thought = extra && extra.thought ? String(extra.thought).trim() : '';
-  const code = extractCodeBlock(detail);
+  const fence = extractCodeFence(detail);
   const artifactBtn = path
     ? `<button type="button" class="plan-artifact-btn" data-artifact-path="${escapeHtml(path)}">查看产物</button>`
     : '';
-  const codeBlock = code
-    ? `<details class="tool-code"><summary>查看代码</summary><pre><code>${escapeHtml(code)}</code></pre></details>`
+  // 与正文（renderMarkdown）共用同一张代码卡：语言标签 + 复制按钮，观感一致。
+  // 外层仍保留「查看代码」折叠：工具输出可能很长，进了过程块不该默认铺开。
+  const codeBlock = fence
+    ? `<details class="tool-code"><summary>查看代码</summary>${
+      mdCodeCardHtml(fence.lang, escapeHtml(fence.code))}</details>`
     : '';
   const thoughtHtml = thought
     ? `<div class="tool-card-thought">${escapeHtml(thought)}</div>`
@@ -1269,17 +1388,11 @@ function renderConclusion(task) {
     label.textContent = '✅ 结论';
     const body = document.createElement('div');
     body.className = 'conclusion-body';
-    // 工具条：复制**原始 Markdown** —— 渲染后再取 textContent 会丢掉列表/表格的换行结构。
-    const tools = document.createElement('div');
-    tools.className = 'msg-tools';
-    const copyBtn = document.createElement('button');
-    copyBtn.type = 'button';
-    copyBtn.className = 'msg-copy';
-    copyBtn.textContent = '复制';
-    tools.appendChild(copyBtn);
+    // 工具条：复制**原始 Markdown**（渲染后再取 textContent 会丢掉列表/表格的换行结构）
+    // + 「重新生成」（用同一条需求新建任务重跑一遍，见 handleRegenerate）。
     conclusionBlockEl.appendChild(label);
     conclusionBlockEl.appendChild(body);
-    conclusionBlockEl.appendChild(tools);
+    conclusionBlockEl.appendChild(buildMsgTools({ regen: true }));
     mountChatNode(conclusionBlockEl);
   }
   const body = conclusionBlockEl.querySelector('.conclusion-body');
@@ -1300,9 +1413,10 @@ async function copyWithFeedback(btn, text) {
   }, 1200);
 }
 
-// 复制按钮：委托到 document，省得每渲染一块就重新绑定一次。
+// 消息级按钮：委托到 document，省得每渲染一块就重新绑定一次。
 // - `.md-copy`：代码块内的复制（取同一张代码卡里的 code）
-// - `.msg-copy`：结论区的复制（取**原始** Markdown，见 renderConclusion 里的 dataset.raw）
+// - `.msg-copy`：复制**原始** Markdown —— 结论区与助手普通消息都把原文挂在 [data-raw] 上
+// - `.msg-regen`：重新生成（带确认弹窗，见 handleRegenerate）
 document.addEventListener('click', async (event) => {
   const target = event.target;
   if (!target || !target.closest) return;
@@ -1315,10 +1429,14 @@ document.addEventListener('click', async (event) => {
   }
   const msgBtn = target.closest('.msg-copy');
   if (msgBtn) {
-    const holder = msgBtn.closest('.conclusion-block');
-    const raw = holder && holder.dataset ? holder.dataset.raw : '';
+    // 原文挂在最近的持有者上：结论块 / 助手消息容器都带 data-raw。
+    const holder = msgBtn.closest('[data-raw]');
+    const raw = holder ? holder.dataset.raw : '';
     if (raw) await copyWithFeedback(msgBtn, raw);
+    return;
   }
+  const regenBtn = target.closest('.msg-regen');
+  if (regenBtn) await handleRegenerate();
 });
 
 /** 渲染评审会纪要卡片（只渲染，不写会话记录）。
@@ -1368,6 +1486,7 @@ async function handleCouncil() {
   }
   const taskId = currentTaskId;
   appendMessage('agent', '评审会已发起，多个角色正在独立表态…');
+  showThinking('评审会进行中…');
   try {
     const minutes = await api.runCouncil(taskId, { rounds: 1 });
     const count = (minutes.participants || []).length;
@@ -1375,6 +1494,8 @@ async function handleCouncil() {
     appendCouncilCard(minutes);
   } catch (err) {
     appendMessage('agent', `❌ 评审会失败：${err.message}`);
+  } finally {
+    hideThinking();
   }
 }
 
@@ -2058,10 +2179,12 @@ async function stopActiveTask() {
 function clearChatUI() {
   const log = document.getElementById('chatLog');
   if (log) log.innerHTML = '';
-  // 过程块 / 结论块随对话流一起被清掉：连同引用一起重置，避免后续扫到已脱离文档的旧块。
+  // 过程块 / 结论块 / 思考指示条随对话流一起被清掉：连同引用一起重置，避免后续扫到已脱离文档的旧块。
   currentProcessBlock = null;
   conclusionBlockEl = null;
   lastProcessTask = null;
+  thinkingEl = null;
+  refreshChatEmpty();
 }
 
 /** 切换回看某个任务：先终止当前后端任务 → 再清界面 → 恢复该任务会话与状态。 */
@@ -2109,6 +2232,32 @@ async function startNewTask() {
 
 /* ──────────────── 业务流程 ──────────────── */
 
+/** 建任务 → 分解 → 默认直接执行（`handleSend` 与「重新生成」共用同一条路径）。
+ *
+ * 抽出来是为了让「重新生成」复用**完全相同**的建任务 / 规划 / 执行链路，
+ * 而不是复制一份 —— 复制出来的那份迟早会跟这里的修正脱节。
+ */
+async function runRequirementAsTask(requirement, options) {
+  const useLLM = document.getElementById('llmToggle')?.checked || false;
+  const planOptions = options && options.planOptions ? options.planOptions : readPlanOptions();
+  const task = await api.createTask(requirement);
+  currentTaskId = task.task_id;
+  currentTaskTitle = task.title || '';
+  // 新任务：重置当前视图（其它任务历史仍保留）。
+  transcript = [];
+  trimmed = false;
+  planState = null;
+  clearChatUI();
+  document.getElementById('actionSlot').innerHTML = '';
+  renderPlanBlock(null);
+  updateTitlebar();
+  updateTaskStatus(task.status);
+  appendMessage('user', requirement);
+  // 触发分解（附带底部栏规划选项）并应用结果；0 步时渲染「暂无可用计划」卡片。
+  const result = await api.planTask(task.task_id, useLLM, planOptions);
+  await applyPlanResult(task.task_id, result);
+}
+
 /** 发送需求 → 创建任务 → 分解 → 默认直接执行（到点暂停则渲染提醒卡）。 */
 async function handleSend() {
   const input = document.getElementById('msgInput');
@@ -2120,10 +2269,10 @@ async function handleSend() {
   isSending = true;
   const sendBtn = document.getElementById('sendBtn');
   if (sendBtn) sendBtn.disabled = true;
+  showThinking('思考中…');
 
   try {
     // 1. 读取底部栏规划选项（模型 / 推理强度 / 高级 / 副结构自检 / 评审会 / LLM 开关）。
-    const useLLM = document.getElementById('llmToggle')?.checked || false;
     const planOptions = readPlanOptions();
 
     // 2. 先聊天：判断这句话是闲聊（直接回话）还是执行诉求（才建任务）。
@@ -2139,27 +2288,9 @@ async function handleSend() {
     }
 
     // 3. 明确要干活 —— 建任务，进入原有规划 / 执行链路。
-    const task = await api.createTask(requirement);
-    currentTaskId = task.task_id;
-    currentTaskTitle = task.title || '';
-    // 新任务：重置当前视图（其它任务历史仍保留）。
-    transcript = [];
-    trimmed = false;
-    planState = null;
-    clearChatUI();
-    document.getElementById('actionSlot').innerHTML = '';
-    renderPlanBlock(null);
-    updateTitlebar();
-    updateTaskStatus(task.status);
-
-    // 4. 显示用户消息
-    appendMessage('user', requirement);
     input.value = '';
     autoGrowInput();
-
-    // 5. 触发分解（附带底部栏规划选项）并应用结果；0 步时渲染「暂无可用计划」卡片。
-    const result = await api.planTask(task.task_id, useLLM, planOptions);
-    await applyPlanResult(task.task_id, result);
+    await runRequirementAsTask(requirement, { planOptions });
   } catch (err) {
     // 失败时把需求还给用户；但若用户在等待期间已重新输入内容，则不覆盖其新输入（审计 P2）
     if (!input.value.trim()) {
@@ -2170,9 +2301,71 @@ async function handleSend() {
     appendMessage('agent', `❌ 错误：${err.message}`);
   } finally {
     isSending = false;
+    hideThinking();
     if (sendBtn) sendBtn.disabled = false;
     await loadTaskSummaries();
     // 规划/执行完成后触发交接判定（轮次 / token / 字符门控由前端累计上报）。
+    checkHandover();
+  }
+}
+
+/** 取最近一条用户需求（transcript 里最后一条用户消息）；没有则返回空串。
+ *
+ * 从 transcript 反查、而不是另存一个变量：刷新 / 切换任务后 transcript 会被重建，
+ * 单独存的变量反而要多维护一份持久化与一致性。
+ */
+function lastUserRequirement() {
+  for (let i = transcript.length - 1; i >= 0; i -= 1) {
+    const entry = transcript[i];
+    if (
+      entry
+      && entry.kind === 'msg'
+      && entry.role === 'user'
+      && typeof entry.text === 'string'
+      && entry.text.trim()
+    ) {
+      return entry.text.trim();
+    }
+  }
+  return '';
+}
+
+/** 「重新生成」：确认后用**同一条需求**新建任务重跑一遍。
+ *
+ * 为什么先确认：它会终止当前任务并清空对话区（旧记录仍留在左栏任务列表可回看）——
+ * 这是不可逆的现场切换，不该点一下就发生。
+ */
+async function handleRegenerate() {
+  const requirement = lastUserRequirement();
+  if (!requirement) {
+    appendMessage('agent', '没有可重新生成的需求：当前对话里还没有你发的需求。');
+    return;
+  }
+  if (isSending) return;
+  const preview = requirement.length > 80 ? `${requirement.slice(0, 80)}…` : requirement;
+  const confirmed = await openConfirmDialog({
+    title: '重新生成',
+    message: `将用同一条需求新建任务、重新执行一遍：\n\n「${preview}」\n\n`
+      + '当前任务会被终止，对话区会清空（旧记录仍可在左栏任务列表中回看）。',
+    confirmText: '重新生成',
+  });
+  if (!confirmed) return;
+
+  isSending = true;
+  const sendBtn = document.getElementById('sendBtn');
+  if (sendBtn) sendBtn.disabled = true;
+  showThinking('重新生成中…');
+  try {
+    // 复用「＋ 新任务」的「终止旧任务 + 清空对话区」路径，再走与首次发送同一条链路。
+    await startNewTask();
+    await runRequirementAsTask(requirement);
+  } catch (err) {
+    appendMessage('agent', `❌ 重新生成失败：${err.message}`);
+  } finally {
+    isSending = false;
+    hideThinking();
+    if (sendBtn) sendBtn.disabled = false;
+    await loadTaskSummaries();
     checkHandover();
   }
 }
@@ -2243,8 +2436,13 @@ async function applyPlanResult(taskId, result) {
   // 默认直接跑：自动调用 /run（有未放行高风险步骤时后端会「到点暂停」）。
   // 先乐观置「执行中」：/run 阻塞到跑完才返回，不置位则整段执行期间中断按钮不可点。
   markTaskRunning(taskId);
-  const ran = await api.runTask(taskId);
-  applyRunResult(ran);
+  showThinking('执行中…（agentic 循环逐轮决定下一步）');
+  try {
+    const ran = await api.runTask(taskId);
+    applyRunResult(ran);
+  } finally {
+    hideThinking();
+  }
 }
 
 /** 归一化 pending_questions 单项为展示文本（后端当前为字符串数组，兼容对象）。 */
@@ -2311,6 +2509,7 @@ async function handleReplan(card) {
   if (!taskId) return;
   const button = card.querySelector('.btn-replan');
   if (button) button.disabled = true;
+  showThinking('重新规划中…');
   try {
     // /plan 只接受 PLANNING 状态，而本卡片出现时任务在 awaiting_confirm，
     // 直接重规划必然 409（非法状态转换）。先「改计划」退回 planning 再重新分解；
@@ -2325,6 +2524,7 @@ async function handleReplan(card) {
   } catch (err) {
     appendMessage('agent', `❌ 重新规划失败：${err.message}`);
   } finally {
+    hideThinking();
     if (button) button.disabled = false;
     await loadTaskSummaries();
     checkHandover();
@@ -2439,6 +2639,7 @@ async function handleApprovePending(card) {
   if (button) button.disabled = true;
   // 放行即离开「等待放行」：先乐观置「执行中」（/resume 同样阻塞），中断按钮才可用。
   markTaskRunning(taskId);
+  showThinking('继续执行中…');
   try {
     const task = await api.resumeTask(taskId, tools);
     appendMessage('agent', tools.length
@@ -2448,6 +2649,7 @@ async function handleApprovePending(card) {
   } catch (err) {
     appendMessage('agent', `❌ 放行失败：${err.message}`);
   } finally {
+    hideThinking();
     if (button) button.disabled = false;
     await loadTaskSummaries();
     checkHandover();
@@ -2496,6 +2698,7 @@ async function handleInterrupt() {
 async function handleResume(card) {
   const taskId = cardTaskId(card);
   if (!taskId) return;
+  showThinking('继续执行中…');
   try {
     const task = await api.resumeTask(taskId);
     syncTaskStatus(taskId, task.status);
@@ -2505,6 +2708,8 @@ async function handleResume(card) {
     await loadTaskSummaries();
   } catch (err) {
     appendMessage('agent', `❌ 恢复失败：${err.message}`);
+  } finally {
+    hideThinking();
   }
 }
 
@@ -3321,12 +3526,12 @@ document.addEventListener('keydown', (e) => {
 
 // 初始化：先恢复刷新前的会话与任务连接，再检测后端连通性 + 加载文件树/任务/项目/密钥
 (async () => {
-  // 已恢复历史会话时不再重复插入连接提示，避免每次刷新都多出一条会话记录。
-  const restored = await restoreSession();
+  // 连通性只走状态栏（#statusBackend 会显示「后端已连接」）：正常连接不再往对话区
+  // 插一条系统消息 —— 否则对话区一进来就"已经有内容"，空态引导永远显示不出来。
+  await restoreSession();
   try {
     await api.health();
     backendOnline = true;
-    if (!restored) appendMessage('agent', '✅ 后端服务已连接，可开始输入需求。');
   } catch (err) {
     backendOnline = false;
     appendMessage('agent', `⚠️ ${err.message}`);
@@ -3335,6 +3540,7 @@ document.addEventListener('keydown', (e) => {
   if (!currentStatus) updateTaskStatus('received');
   updateTitlebar();
   updateStatusModel();
+  refreshChatEmpty();
   loadFileTree();
   loadProjects();
   loadApiKeyStatus();

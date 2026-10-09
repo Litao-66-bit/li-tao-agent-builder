@@ -28,6 +28,25 @@ def _read(relative: str) -> str:
     return (_PROJECT_ROOT / relative).read_text(encoding="utf-8")
 
 
+def _extract_js_function(source: str, name: str) -> str:
+    """按花括号配对切出一个 JS 函数（供「用 node 真跑」的用例使用）。
+
+    比 ``_function_body`` 严格：后者认的是"下一个顶层 ``}``"，遇到含嵌套块或对象字面量
+    的函数会切早；这里按深度配对，保证切出来的一定是**语法完整**的函数。
+    """
+    start = source.index(f"function {name}(")
+    brace = source.index("{", start)
+    depth = 0
+    for idx in range(brace, len(source)):
+        if source[idx] == "{":
+            depth += 1
+        elif source[idx] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start : idx + 1]
+    raise AssertionError(f"函数不配对: {name}")
+
+
 class TestPlanBlockRendersSteps:
     """计划区块渲染 steps 明细（而非只渲染数量）。"""
 
@@ -823,12 +842,16 @@ class TestChatFirst:
         assert "'/chat'" in source
 
     def test_发送先分流再建任务(self) -> None:
-        body = _function_body(_read("frontend/js/app.js"), "handleSend")
+        source = _read("frontend/js/app.js")
+        body = _function_body(source, "handleSend")
         assert "api.chat(requirement, recentChatHistory()" in body
         assert "verdict.kind !== 'task'" in body
         assert "appendMessage('agent', verdict.reply)" in body
-        # 分流必须早于建任务 —— 否则又回到「无条件弹计划」
-        assert body.index("api.chat(") < body.index("api.createTask(")
+        # 分流必须早于建任务 —— 否则又回到「无条件弹计划」。
+        # 建任务已抽成 runRequirementAsTask（与「重新生成」共用同一条链路），
+        # 所以这里比的是它的**调用点**，并额外钉住建任务确实只在那条链路里发生。
+        assert body.index("api.chat(") < body.index("runRequirementAsTask(")
+        assert "api.createTask(requirement)" in _function_body(source, "runRequirementAsTask")
 
     def test_上下文只取纯文本消息(self) -> None:
         body = _function_body(_read("frontend/js/app.js"), "recentChatHistory")
@@ -941,8 +964,12 @@ class TestMarkdownRendering:
         source = _read("frontend/js/app.js")
         body = _function_body(source, "renderMarkdown")
         assert "escapeHtml(" in body
-        assert "md-code" in body
-        assert "md-copy" in body
+        # 代码卡（语言标签 + 复制）已抽成 mdCodeCardHtml：正文与工具卡共用同一张卡，
+        # 所以断言分两处 —— 正文**委托**给它，卡片的 markup 在它自己体内。
+        assert "mdCodeCardHtml(" in body
+        card = _function_body(source, "mdCodeCardHtml")
+        assert "md-code" in card
+        assert "md-copy" in card
 
     def test_结论用_markdown_渲染而非纯文本(self) -> None:
         source = _read("frontend/js/app.js")
@@ -1002,19 +1029,6 @@ class TestMarkdownRenderingBehavior:
 
         source = _read("frontend/js/app.js")
 
-        def extract(name: str) -> str:
-            start = source.index(f"function {name}(")
-            brace = source.index("{", start)
-            depth = 0
-            for idx in range(brace, len(source)):
-                if source[idx] == "{":
-                    depth += 1
-                elif source[idx] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        return source[start : idx + 1]
-            raise AssertionError(f"函数不配对: {name}")
-
         sample = (
             "# 标题\n\n"
             "**加粗** 与 `行内码`\n\n"
@@ -1023,7 +1037,11 @@ class TestMarkdownRenderingBehavior:
             "> 引用一行\n\n"
             "<script>alert(1)</script>\n"
         )
-        js = "\n".join(extract(n) for n in ("escapeHtml", "mdInline", "renderMarkdown"))
+        # renderMarkdown 现在委托 mdCodeCardHtml 产出代码卡 → 必须一并注入，否则 ReferenceError
+        js = "\n".join(
+            _extract_js_function(source, n)
+            for n in ("escapeHtml", "mdInline", "mdCodeCardHtml", "renderMarkdown")
+        )
         js += f"\nconst sample = {json.dumps(sample)};\nconsole.log(renderMarkdown(sample));\n"
         script = tmp_path / "md-check.js"
         script.write_text(js, encoding="utf-8")
@@ -1041,6 +1059,45 @@ class TestMarkdownRenderingBehavior:
         # XSS：样本里的 <script> 只能以实体形式出现
         assert "<script>" not in out
         assert "&lt;script&gt;" in out
+
+    def test_围栏代码卡保留语言标签且与工具卡同构(self, tmp_path) -> None:
+        """工具卡改用 extractCodeFence + mdCodeCardHtml 后，仍必须产出语言标签与复制按钮。
+
+        这是「工具卡代码块复用正文 .md-code 卡片」的行为侧证据：静态断言只能证明
+        调用了哪个函数，证明不了渲染出来的卡里真的有 `python` 标签。
+        """
+        import shutil
+        import subprocess
+
+        import pytest
+
+        node = shutil.which("node")
+        if not node:
+            pytest.skip("本环境没有 node，跳过渲染行为验证")
+
+        source = _read("frontend/js/app.js")
+        js = "\n".join(
+            _extract_js_function(source, n)
+            for n in ("escapeHtml", "extractCodeFence", "mdCodeCardHtml")
+        )
+        js += (
+            "\nconst fence = extractCodeFence('说明\\n```python\\nprint(1)\\n```\\n');\n"
+            "console.log(JSON.stringify(fence));\n"
+            "console.log(mdCodeCardHtml(fence.lang, escapeHtml(fence.code)));\n"
+        )
+        script = tmp_path / "code-card-check.js"
+        script.write_text(js, encoding="utf-8")
+
+        proc = subprocess.run(
+            [node, str(script)], capture_output=True, text=True, encoding="utf-8", check=False
+        )
+        out = proc.stdout or ""
+        assert out, proc.stderr  # node 起不来/语法错误时给出原因
+
+        assert '"lang":"python"' in out
+        assert "md-code-lang" in out and ">python<" in out
+        assert "md-copy" in out
+        assert "print(1)" in out
 
 
 class TestChatStickToBottom:
@@ -1074,9 +1131,11 @@ class TestConclusionCopyTool:
     def test_结论块带复制按钮并保存原始文本(self) -> None:
         source = _read("frontend/js/app.js")
         body = _function_body(source, "renderConclusion")
-        assert "msg-copy" in body
+        # 工具条改由 buildMsgTools 统一构造（「复制」+「重新生成」）。
+        assert "buildMsgTools({ regen: true })" in body
         # 渲染后再取 textContent 会丢列表/表格换行 → 复制必须用原始文本
         assert "dataset.raw = text" in body
+        assert "msg-copy" in _function_body(source, "buildMsgTools")
 
     def test_复制处理优先取原始文本(self) -> None:
         source = _read("frontend/js/app.js")
@@ -1131,6 +1190,142 @@ class TestCssColorTokens:
                       "--shadow-modal", "--shadow-card", "--shadow-drawer"):
             assert f"{token}:" in css, token          # 在 :root 里定义
             assert f"var({token})" in css, token      # 被规则引用
+
+
+class TestAssistantMessageCopy:
+    """助手**普通消息**也带「复制」，且复制原始 Markdown（与结论区同一约定）。"""
+
+    def test_助手消息带复制条并保存原文(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "renderMessage")
+        assert "buildMsgTools()" in body
+        assert "wrap.dataset.raw" in body
+        # 用户自己写的内容不给「复制」—— 抄自己刚发的话没有意义
+        assert "role !== 'user'" in body
+
+    def test_复制按最近的持有者取原文(self) -> None:
+        source = _read("frontend/js/app.js")
+        # 不再写死 .conclusion-block：助手消息容器同样带 data-raw，也能被取到
+        assert "msgBtn.closest('[data-raw]')" in source
+        assert "msgBtn.closest('.conclusion-block')" not in source
+
+    def test_工具条由同一个构造函数产出(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "buildMsgTools")
+        assert "msg-copy" in body
+        assert "msg-regen" in body
+
+    def test_消息容器是纵向列(self) -> None:
+        css = _read("frontend/styles.css")
+        anchor = ".msg-agent {"
+        block = css[css.index(anchor) : css.index(anchor) + 160]
+        # 工具条是容器的第二个子元素：不改成纵向就会被挤到气泡右侧
+        assert "flex-direction: column" in block
+        assert "#" not in block
+
+
+class TestToolCardCodeReusesMdCard:
+    """工具卡的代码块复用正文的 .md-code 卡片（语言标签 + 复制），不再各写一套。"""
+
+    def test_工具卡用同一张代码卡(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "renderToolCard")
+        assert "extractCodeFence(detail)" in body
+        assert "mdCodeCardHtml(fence.lang" in body
+
+    def test_围栏提取保留语言标签(self) -> None:
+        source = _read("frontend/js/app.js")
+        body = _function_body(source, "extractCodeFence")
+        assert "lang" in body and "code" in body
+        # 旧的 extractCodeBlock 保留（计划区块仍在用），但改为复用同一提取器
+        assert "extractCodeFence(text)" in _function_body(source, "extractCodeBlock")
+
+    def test_代码卡构造函数被正文与工具卡共用(self) -> None:
+        source = _read("frontend/js/app.js")
+        assert "mdCodeCardHtml(fence[1], code.join('\\n'))" in source
+        assert source.count("mdCodeCardHtml(") >= 3  # 定义 + renderMarkdown + renderToolCard
+
+    def test_嵌套代码卡抵消旧样式(self) -> None:
+        css = _read("frontend/styles.css")
+        anchor = ".tool-code .md-code pre {"
+        assert anchor in css
+        block = css[css.index(anchor) : css.index(anchor) + 200]
+        # 不抵消就会在 .tool-code 的 pre 样式里套出双层边框
+        assert "border: 0" in block
+        assert "background: none" in block
+        assert "#" not in block
+
+
+class TestRegenerate:
+    """「重新生成」：带确认弹窗，复用同一条需求新建任务重跑。"""
+
+    def test_结论区带重新生成入口(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "renderConclusion")
+        assert "buildMsgTools({ regen: true })" in body
+
+    def test_重新生成先确认再动手(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "handleRegenerate")
+        assert "openConfirmDialog({" in body
+        assert "if (!confirmed) return;" in body
+        # 未确认就绝不能终止任务 / 清空对话区
+        assert body.index("openConfirmDialog") < body.index("startNewTask()")
+
+    def test_复用同一条需求与同一条建任务路径(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "handleRegenerate")
+        assert "lastUserRequirement()" in body
+        assert "runRequirementAsTask(requirement)" in body
+        assert "startNewTask()" in body
+
+    def test_需求取自最后一条用户消息(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "lastUserRequirement")
+        assert "entry.role === 'user'" in body
+        assert "entry.text.trim()" in body
+
+    def test_复制委托也认重新生成(self) -> None:
+        source = _read("frontend/js/app.js")
+        assert "target.closest('.msg-regen')" in source
+        assert "await handleRegenerate();" in source
+
+
+class TestChatEmptyAndThinking:
+    """空态引导 + 「思考中」指示：agentic 循环是阻塞的，等待期间不能像卡死。"""
+
+    def test_空态引导不属于对话条目(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "refreshChatEmpty")
+        assert "chat-empty" in body
+        # 空态若带 .chat-item，既占裁剪名额、又会被判成"已经有内容"
+        assert "'chat-empty'" in body
+        assert "':scope > .chat-item'" in body
+
+    def test_思考指示条有显示与收尾(self) -> None:
+        source = _read("frontend/js/app.js")
+        show = _function_body(source, "showThinking")
+        hide = _function_body(source, "hideThinking")
+        assert "chat-thinking" in show
+        assert "thinking-text" in show
+        assert "thinkingEl.remove()" in hide
+
+    def test_阻塞调用都在finally里收掉指示条(self) -> None:
+        source = _read("frontend/js/app.js")
+        # show / hide 必须成对：漏掉 hide 会让指示条一直转
+        assert source.count("showThinking(") >= 5
+        for name in ("handleSend", "handleRegenerate", "handleApprovePending", "handleResume"):
+            assert "hideThinking()" in _function_body(source, name), name
+
+    def test_运行前显示执行中(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "applyPlanResult")
+        assert "showThinking(" in body
+        assert body.index("showThinking(") < body.index("api.runTask(")
+        assert "hideThinking()" in body
+
+    def test_正常连接不再往对话区塞系统消息(self) -> None:
+        source = _read("frontend/js/app.js")
+        # 否则对话区一进来就"已经有内容"，空态引导永远显示不出来
+        assert "后端服务已连接" not in source
+        assert "refreshChatEmpty();" in source
+
+    def test_空态与思考条样式只用token(self) -> None:
+        css = _read("frontend/styles.css")
+        for anchor in (".chat-empty {", ".chat-thinking {"):
+            block = css[css.index(anchor) : css.index(anchor) + 260]
+            assert "#" not in block, f"{anchor} 写死了颜色"
 
 
 def _function_body(source: str, name: str) -> str:
