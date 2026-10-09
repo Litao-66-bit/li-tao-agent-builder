@@ -17,15 +17,18 @@
 > 修完跑出**首轮真正收敛**（12 步、测试 5 项通过、沙箱实跑成功，连续重复轮次 6 → 0）—— 详见「今日完成（2026-10-08）」下的「续：同日第二轮实测」小节。
 > 基线 **2033 → 2077 passed / 11 skipped**。
 >
-> **未推送提醒**：本会话全部改动**仍未推送 GitHub**（本地无 `.git`，只能走 REST API）。见「未推送状态」一节。
+> **未推送提醒**：本地 `main` 相对远端 `origin/main` **ahead 6**，全部未推送。本地**已有 `.git`**
+> （站在远端 HEAD 上，推送是快进、远端独有文件自动保留），**不再需要 REST API**。
+> 最新状态见「今日完成（2026-10-09 晚 · 第二轮）」一节。
 
 ## 新会话启动提示词（直接粘贴）
 
 ```text
-继续 Agent Builder 项目（c:\Users\李陶\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\work-mode-projects\6abcee34807a00aa83da2398）。
+继续 Agent Builder 项目（工作副本 = **C:\agent\li-tao-agent-builder**；旧 TRAE 目录只当备份，别再改）。
 
-先完整读 docs/HANDOVER.md，重点读「今日完成（2026-10-08）」「当前架构与状态」「P3：执行形态 A/B」三节。
-（后端 / 前端当前**未运行**，需按下方命令重启；根目录已无散落样例，实测产物都收在 `_sample_backup/`，可整目录删。）
+先完整读 docs/HANDOVER.md，重点读「今日完成（2026-10-09 晚 · 第二轮）」（最新状态 / 9 张卡 / 实机操作坑 / 下一步）
+与「当前架构与状态」两节。
+（后端 / 前端当前**未运行**，需按下方命令重启；重启后**必须重填 API 密钥** —— 密钥只在后端内存。）
 
 已完成：输出形态重构（四类机器输出消除 + 过程块折叠）、对话优先（/chat 分流）、产物入口、
 agentic 下隐藏计划块、① 结论区 ② DeepSeek 式完整折叠 ③ 规划阶段去工作流化、
@@ -60,17 +63,17 @@ test_run 本机跑不通（改用 sys.executable -m pytest）、
 
 硬性约束：roles/ 层禁止 import api/tools/llm；颜色只写 CSS token、交互一律 <button>；
 会话持久化只用 sessionStorage；改前端先看 tests/test_frontend_workspace_ui.py 等静态接线测试；
-基线 = ruff 干净 + pytest 全绿（当前 2077 passed / 11 skipped）。
+基线 = ruff 干净 + pytest 全绿（当前 **2235 passed / 11 skipped**）。
 
 运行与校验（项目根）：
-- 后端：$env:PYTHONPATH = ".deps"; python -m uvicorn agent_builder.api.app:create_app --factory --reload --port 8000
-  ⚠️ 必须带 --reload，否则改了后端不生效（踩过：新路由没加载 → Method Not Allowed）；
-  ⚠️ 但**跑批 / 长测别用 --reload**：生成物里一旦出现 .py 就会重载并清掉内存里的密钥。
+- 后端：$env:PYTHONPATH = ".deps"; python -m uvicorn agent_builder.api.app:create_app --factory --port 8000
+  ⚠️ **默认不加 --reload**（用户口径，2026-10-09 晚确认）：生成物里一旦出现 .py 就会触发热重载并
+  清掉内存里的密钥；要加载后端改动就**手动重启**（重启后同样要重填密钥）。
 - 前端：python -m http.server 8080 --directory frontend
 - 校验：python -m ruff check . ; python -m pytest ; node --check frontend/js/app.js
 - A/B 跑批：python -m agent_builder.evaluation.mode_ab --model deepseek-chat --reps 3
   （需先在前端存密钥；密钥是内存态，后端每次重启都要重存）
-- ⚠️ 前端有缓存坑：改了前端资源要 bump index.html 里的 ?v= 版本号（当前 20261104），并在浏览器 Ctrl+Shift+R
+- ⚠️ 前端有缓存坑：改了前端资源要 bump index.html 里的 ?v= 版本号（当前 **20261118**），并在浏览器 Ctrl+Shift+R
 ```
 
 ## 今日完成（2026-10-07）
@@ -366,6 +369,71 @@ test_run 本机跑不通（改用 sys.executable -m pytest）、
 - **不要用 PowerShell 做源码文本往返**：PS 5.1 的 `Get-Content`/`WriteAllLines` 默认非 UTF-8，会把中文字符串读坏（实测把 `test_contracts.py` 写成 `unterminated string literal`）→ 一律用 Python `utf-8` + `newline=""` 读写，并 `ast.parse` 自检。
 - **RUF100**：写无用的 `# noqa` 会让 `ruff check .` 失败；而 lint 失败会让 pytest 被 **skip**（看起来像"测试没跑"）。
 
+## 今日完成（2026-10-09 晚 · 第二轮）：实机跑通验收 + 9 张任务卡
+
+> 工作副本已迁到 **`C:\agent\li-tao-agent-builder`**（旧 TRAE 目录只当备份，**不要再改**）。
+
+### 起点：让 agent 真去跑一遍「论文调研 agent」
+
+同一条需求跑了三轮，问题全是**实机跑出来的**，不是读代码看出来的：
+
+| 轮次 | 结果 | 暴露的问题 |
+|---|---|---|
+| run1 `98bab8c4` | 5 步「收敛」，报「测试通过 9 项」 | **假绿**：验证跑的是仓库里的**旧同名文件**（卡1） |
+| run2 `d2cb511f` | 3 步 / **0 产物** / `stagnant` | 空工作区里 `file_list(".")` 连撞 3 次被空转闸门掐死（卡A、卡B） |
+| run3 `714e0391` | **5 步 / 2 文件 / `final`**，`5 passed`（真） | 收敛正确，但「产物」面板不刷新（卡E） |
+
+### 9 张卡（都已完成，各有实测证据 + 回归测试）
+
+| 卡 | 修了什么 | 关键证据 |
+|---|---|---|
+| 1 | `test_run` 的 target 按**当前工作区**解析（子进程传 `cwd` + 绝对路径） | 仓库诱饵 9 项 vs 工作区 5 项；修后报「5 项」，独立复跑一致 |
+| 2 | 输出**前置审计行**「工作区=… 实际执行=…」；工具层自校验越界并拒绝 | 实测首行可见；越界 target 一次都不执行 |
+| 3 | 结论区色调跟状态走（paused/stopped/failed 不再用绿底「✅ 结论」） | 浏览器三档色值实测 |
+| 4 | 不变式：**结论块永远压在对话流最后** | 追加产物行后顺序仍为 […, 结论] |
+| 5 | 任务徽章改成原子单元（不收缩、不内部换行） | 「执行中」36×32 → 44×18 |
+| A | `file_list` 空目录返回**显式标记**，不再返回空串 | 空目录 len 0 → 20；模型从「工作区情况未知」变成「工作区为空」→ 直接写文件 |
+| B | **重复同一个只读调用**（≥2 轮）也注入「必须动手」纠正 | 纠正现在**早于判停**注入；读不同文件仍不打扰 |
+| C | 非收敛停下**不再当作可交付**（统一判定，详情卡与左栏列表同口径） | 真数据实测：`stagnant` → 停下卡、**无交付按钮**；`final` → 交付卡 |
+| D | 子进程输出编码锁死（读侧 `encoding="utf-8"` + 写侧 `PYTHONIOENCODING=utf-8`） | 修前 `proc.stdout=None` → `TypeError` 把 test_run 崩掉 |
+
+### 三条被测试"钉住的缺陷"（这轮最值得记的教训）
+
+卡1 / 卡A / 卡C 各有一条**既有测试把错误行为当成规格钉住**了，所以缺陷一直活着：
+`test_list_empty_dir` 断言 `result == ""`、`test_停下卡只在仍挂在执行中时出现` 断言
+`status === 'executing'` 那个门槛、`test_列表项也显示已停下` 断言同一口径。
+**改这类 bug 时必须连测试一起改**，否则"修好"后套件反而红。
+
+### 实机操作坑（这一轮踩到的，务必知道）
+
+1. **服务可能指向旧副本**：这次跑着的 8080/8000 是**旧 TRAE 目录**的进程 —— 前端加载旧 `app.js`，
+   后端 `/projects` 回的 `workspace_dir` 也是旧目录。启动前先确认服务是从工作副本起的。
+2. **给 agent 一个干净工作区**：别让它写进仓库或旧副本 ——
+   `$env:AGENT_BUILDER_PROJECTS_FILE="C:\agent\paper-agent-registry\projects.json"`（注册表放工作区**外**），
+   再 `POST /projects {"path":…}` + `POST /projects/{id}/open` 切过去。
+3. **API 密钥只在后端内存**：重启即清空，必须重填（两处副本都只有 `.env.example`，`.env` 已 gitignore）。
+   来源优先级：运行时存储（前端提交）> 环境变量 `DEEPSEEK_API_KEY`；查询 `GET /settings/api-key`。
+4. **敏感端点要带本机标识头** `X-Agent-Builder-Client: web`（`/settings/api-key*`、`/workspace/file*`、
+   `/projects` 都是），缺了就是 403 —— 那是设计，不是 bug。
+5. **仓库 `outputs/` 里有一份"同名诱饵"**：`paper_agent.py` / `test_paper_agent.py`（**9 个用例**），
+   正是 run1 假绿的来源。**不要删** —— 它是卡1 的天然对照物。
+6. **DSH 沙箱写不进仓库目录**：`C:\agent` 可写，但 `C:\agent\li-tao-agent-builder\**`（含 `.git`）被拒
+   （缺低完整性标记，权限修复脚本不解决这一项）→ ruff / pytest / commit / worktree 都要**逐条申请提权**；
+   改前端文件用编辑工具是**可以**的（走另一条写入路径）。
+   另：临时跑 pytest 会留下 gitignore 掉的 `.pytest_cache/`，删不掉也无害。
+7. **工具脚本别用 PowerShell 做文本往返**：用 Python `utf-8` 读写（本轮脚本都在 `C:\agent\*.py`）。
+
+### 下一步（按优先级）
+
+1. **卡E**：任务产出后「产物」面板不刷新，仍显示「（工作区为空）」—— 与磁盘/任务产物矛盾。
+2. **推送**：先跑干净镜像 CI（`git worktree add --detach .dsh-scratch/ciN HEAD` → ruff + pytest 全绿），
+   再 `git -c http.sslBackend=openssl -c http.version=HTTP/1.1 push <带 token 的 url> HEAD:main`（网络抖，要重试）；
+   PAT 必须勾 **`Contents: Read and write`**；**绝不 `--amend` 已推送的提交**。
+3. **卡6（降级为观察项）**：「实现 ↔ 测试」接口不一致这轮**未复现**（本次测试用的全是真 API 且真通过），
+   怀疑它是卡1 假绿的**后果**而非独立缺陷。
+4. **产品级缺口**：生成的「论文调研 agent」只是**离线骨架**（`OfflineBackend` 在 4 条硬编码语料里匹配），
+   因为这条链路没给"调研"配可用的检索工具 —— 想让输出真有用，得把联网检索接进来。
+
 ## 基础运行环境
 
 - **操作系统**：Windows + PowerShell
@@ -463,14 +531,20 @@ node --check frontend/js/app.js
 
 ## 未推送状态
 
-- **当前状态（2026-10-09 晚更新）**：`main` 已推进到 **`fd0f948`**，该提交的 CI **全绿**（3.10 / 3.11 / 3.12 三个 job 全 success）。
-  另有**本地已验证、待推送**的提交（本轮文档/lock 对齐 + 本文件）：
-  `e1ee7a9`（README 按事实更新 + requirements.lock 与 pyproject 对齐）、
-  `2ad2e7d`（NOTICE 去掉 langgraph 声明 + `tests/test_p2.py` 的 lock 一致性断言 + 清理失效注释）。
-  - **待推送原因**：PAT 在最后一步已失效（GitHub 返回 `remote: Invalid username or token`）。
-  - **补推方式（二选一）**：① 换新 PAT（`Contents: Read and write`）后 `git push`（记得 `-c http.sslBackend=openssl` + 多层重试）；
-    ② 在 clone `C:\Users\李陶\li-tao-agent-builder`（SSH 通道、**不需要 token**）里跑
-    `git fetch "<本项目根目录>" main` 然后 `git push origin FETCH_HEAD:main` —— 是**快进推送**。
+- **当前状态（2026-10-09 晚 · 第二轮收工）**：`main` = **`1ad2488`**，相对远端 `origin/main`（`3608e0a`）
+  **ahead 6**，全部**未推送**。本地**已有 `.git`**（站在远端 HEAD 上 → 推送是**快进**，远端独有文件自动保留）：
+  `ba06b08`（前端：助手消息复制 / 工具卡代码卡 / 重新生成 / 空态与思考中）、
+  `505f07a`（test_run 按工作区解析 target —— 修「假绿」）、
+  `c5236c0`（前端：结论色调跟状态走 / 产物行顺序 / 任务徽章）、
+  `b2af32b`（file_list 空目录显式标记 + 重复只读调用注入纠正）、
+  `20cf626`（前端：非收敛停下不再当作可交付）、
+  `1ad2488`（test_run 子进程输出编码锁死）。
+  - **推送顺序（别跳步）**：① 先 `git worktree add --detach .dsh-scratch/ciN HEAD` 建**干净镜像**，
+    在镜像里跑 `ruff check .` + `pytest` **全绿才推**；②
+    `git -c http.sslBackend=openssl -c http.version=HTTP/1.1 push <带 token 的 url> HEAD:main`；
+    ③ fine-grained PAT 必须勾 **`Contents: Read and write`**（`Administration` 不行）；④ 网络很抖，**带重试**；
+    ⑤ **绝不对已推送的提交 `--amend`**（会 non-fast-forward 被拒）→ 在已推送提交**之上追加**新提交。
+  - 上一轮说的「PAT 失效 / 只能走 REST API」**已过时**：本地有 `.git` 后直接 `git push` 即可。
 - 下面这几段是 **2026-10-09 早些时候（推送之前）的历史盘点**，保留作为"当时如何逐文件核对差异"的方法记录：
 - 本会话全部改动**未推送**（当时本地无 `.git`）。想确认「到底哪些没推」，最可靠的做法是拉取远端 `main` 的 tree 与本地文件逐一比对。
 - **2026-10-09 已按上述办法精确盘点**（免 token：远端 `main` 的 tree 与本地逐文件比 git blob 哈希，
