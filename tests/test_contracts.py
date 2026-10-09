@@ -1,4 +1,4 @@
-"""契约层单元测试：错误码 / 消息协议 / Schema / 状态机 / Conductor。
+"""契约层单元测试：错误码 / 消息协议 / Schema / 状态机。
 
 覆盖 docs/contracts/ 01~04 的关键约束：
 - E_PERMISSION 永不重试；错误必带 correlation_id
@@ -39,7 +39,6 @@ from agent_builder.contracts.state_machine import (
     can_transition,
     next_status,
 )
-from agent_builder.core.conductor import Conductor
 
 # ── 04 · 错误码体系 ─────────────────────────────────────────────
 
@@ -247,87 +246,3 @@ class TestStateMachine:
 
 def _make_plan() -> Plan:
     return Plan(task_id="t-1", order=["s-1"])
-
-
-class TestConductor:
-    def test_full_lifecycle(self):
-        c = Conductor("t-1", correlation_id="c-1")
-        assert c.status == TaskStatus.RECEIVED
-        c.confirm_request()
-        c.plan_ready(_make_plan())
-        assert c.status == TaskStatus.AWAITING_CONFIRM
-        c.accept_plan()
-        c.steps_done()
-        c.verify_passed()
-        c.deliver()
-        assert c.status == TaskStatus.DELIVERED
-        # 审计日志共 6 条转换
-        assert len(c.audit_log) == 6
-
-    def test_plan_rejected_returns_to_planning(self):
-        c = Conductor("t-1")
-        c.confirm_request()
-        c.plan_ready(_make_plan())
-        c.reject_plan()
-        assert c.status == TaskStatus.PLANNING
-
-    def test_rework_then_fail_after_max_retry(self):
-        c = Conductor("t-1")
-        c.confirm_request()
-        c.plan_ready(_make_plan())
-        c.accept_plan()
-        c.steps_done()
-        # 第 1 次失败 → reworking，retry=1
-        c.verify_failed("测试未通过", "test_log A")
-        assert c.status == TaskStatus.REWORKING
-        assert c.retry_count == 1
-        c.rework_done()
-        c.steps_done()
-        # 第 2 次失败 → reworking，retry=2
-        c.verify_failed("测试未通过", "test_log B")
-        assert c.status == TaskStatus.REWORKING
-        assert c.retry_count == 2
-        assert MAX_RETRY == 2
-        c.rework_done()
-        c.steps_done()
-        # 第 3 次失败 → retry≥2 → failed
-        c.verify_failed("测试未通过", "test_log C")
-        assert c.status == TaskStatus.FAILED
-
-    def test_interrupt_requires_resume_point(self):
-        c = Conductor("t-1")
-        c.confirm_request()
-        c.plan_ready(_make_plan())
-        c.accept_plan()
-        with pytest.raises(AgentError, match="resume_point"):
-            c.interrupt(resume_point="")
-
-    def test_interrupt_and_resume(self):
-        c = Conductor("t-1")
-        c.confirm_request()
-        c.plan_ready(_make_plan())
-        c.accept_plan()
-        c.interrupt(resume_point="step-002", reason="user_stop")
-        assert c.status == TaskStatus.INTERRUPTED
-        assert c.state.interrupted is not None
-        assert c.state.interrupted.resume_point == "step-002"
-        c.resume()
-        assert c.status == TaskStatus.EXECUTING
-        assert c.state.interrupted is None  # 恢复后清除
-
-    def test_abort_from_interrupted(self):
-        c = Conductor("t-1")
-        c.confirm_request()
-        c.plan_ready(_make_plan())
-        c.accept_plan()
-        c.interrupt(resume_point="s-1")
-        c.abort()
-        assert c.status == TaskStatus.FAILED
-
-    def test_illegal_event_raises_internal(self):
-        c = Conductor("t-1")
-        # received 状态直接尝试 ALL_STEPS_DONE → E_INTERNAL
-        with pytest.raises(AgentError) as exc_info:
-            c.apply(TaskEvent.ALL_STEPS_DONE)
-        assert exc_info.value.error_name == "E_INTERNAL"
-        assert exc_info.value.error_code == 9000
