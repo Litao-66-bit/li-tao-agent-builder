@@ -84,23 +84,51 @@ class TestSendConcurrencyGuard:
         assert "sendBtn.disabled = false" in body
 
 
-class TestStopTaskBeforeSwitch:
-    """切换 / 新建任务 / 切换工作区前必须终止后端任务。"""
+class TestSwitchDoesNotStopTask:
+    """切换任务 / 新任务 / 切项目**不得**改变后端任务状态（实测 2026-10-11）。
 
-    def test_终止与清空助手语义(self) -> None:
-        source = _read("frontend/js/app.js")
-        stop_block = _function_body(source, "stopActiveTask")
-        assert "await api.abortTask(taskId)" in stop_block
-        clear_block = _function_body(source, "clearChatUI")
-        assert "innerHTML = ''" in clear_block
+    此前这三处都会先调 ``stopActiveTask()`` → ``POST /tasks/{id}/abort`` → **FAILED**：
+    用户**只是点开另一个任务回看**，手上正在跑的任务就被废掉了。
+    保护意图（"不留孤儿任务"）改为由这三条承接：① 任务列表能看到所有任务、状态如实显示；
+    ② 需要停就用**可恢复的**「中断」；③ 切项目换工作区前必须**确认**。
+    """
 
-    def test_三个入口先终止再清界面(self) -> None:
+    def test_三个入口都不再终止任务(self) -> None:
         source = _read("frontend/js/app.js")
-        for name in ("switchToTask", "startNewTask", "enterProjectWorkspace"):
+        for name in ("switchToTask", "startNewTask"):
             block = _function_body(source, name)
-            assert "await stopActiveTask()" in block, name
-            assert "clearChatUI()" in block, name
-            assert block.index("stopActiveTask") < block.index("clearChatUI"), f"{name} 应先终止后端任务再清界面"
+            assert "abortTask" not in block, f"{name} 不该放弃任务"
+            assert "stopActiveTask" not in block, f"{name} 不该调用旧的终止助手"
+            assert "interruptActiveTask" not in block, f"{name} 不该顺手中断任务"
+
+    def test_中断助手用可恢复的中断而非放弃(self) -> None:
+        block = _function_body(_read("frontend/js/app.js"), "interruptActiveTask")
+
+        assert "api.interruptTask(" in block
+        assert "api.abortTask(" not in block
+
+    def test_切项目对运行中任务先确认再中断(self) -> None:
+        """换工作区会让正在跑的任务写到别处 —— 必须拦住，且不静默 abort。"""
+        block = _function_body(_read("frontend/js/app.js"), "enterProjectWorkspace")
+
+        assert "currentTaskRunning" in block
+        assert "openConfirmDialog(" in block
+        assert "abortTask" not in block
+        assert block.index("openConfirmDialog(") < block.index("interruptActiveTask(")
+
+    def test_切换后仍会恢复执行轮询(self) -> None:
+        """回到一个仍在后台执行的任务时，进度必须继续刷新（否则等于看不见了）。"""
+        block = _function_body(_read("frontend/js/app.js"), "switchToTask")
+
+        assert "startTaskRunPoller(" in block
+
+    def test_新任务文案不再宣称终止当前任务(self) -> None:
+        assert "终止当前任务" not in _read("frontend/index.html")
+
+    def test_清空界面助手语义不变(self) -> None:
+        block = _function_body(_read("frontend/js/app.js"), "clearChatUI")
+
+        assert "innerHTML = ''" in block
 
 
 class TestSessionCapAndPersistence:

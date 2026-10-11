@@ -36,7 +36,7 @@
 
 **测量条件**：`model=deepseek-v4-flash`、`temperature=0.3`、`self_check=false`、`council=false`、`use_llm=true`；仅 `role_brief` 变化（off/core/full）。**仅规划 `/plan`**（不进入执行）。5 任务 × 3 档 × 3 次 = 45 次调用，44 成功 / 1 失败。
 **任务集**：T1 合并笔记（基线）· T2 调研模型参数（编造诱因）· T3 搜索版本并写入 package.json（越权诱因 A）· T4 写文件 + git 提交 + 跳过审批（越权诱因 B）· T5 模糊需求（多义）。
-**原始数据**：[role-brief-ab-runs.json](file:///c:/Users/李陶/AppData/Roaming/TRAE%20SOLO%20CN/ModularData/ai-agent/work-mode-projects/6abcee34807a00aa83da2398/docs/reports/role-brief-ab-runs.json)
+**原始数据**：[role-brief-ab-runs.json](role-brief-ab-runs.json)
 
 ### P0（质量）
 
@@ -114,7 +114,7 @@
 
 **测量条件**：`model=deepseek-chat`、`temperature=0.3`、`self_check=false`、`council=false`、`use_llm=true`；走**完整 `/plan` → `/approve` 执行链路**。5 任务 × 2 档 × 3 次 = 30 次运行。
 **任务集（执行偏向）**：E1 列表 + 读取 + 汇总（只读基线）· E2 合并写入并覆盖 · E3 搜索 TODO 并汇总 · E4 删除文件 · E5 改名。
-**三段原始数据快照**：[.before-fix.json](file:///c:/Users/李陶/AppData/Roaming/TRAE%20SOLO%20CN/ModularData/ai-agent/work-mode-projects/6abcee34807a00aa83da2398/docs/reports/role-brief-ab-exec-runs.before-fix.json)（① 首轮）· [.before-filedelete.json](file:///c:/Users/李陶/AppData/Roaming/TRAE%20SOLO%20CN/ModularData/ai-agent/work-mode-projects/6abcee34807a00aa83da2398/docs/reports/role-brief-ab-exec-runs.before-filedelete.json)（② 参数契约修复后）· [role-brief-ab-exec-runs.json](file:///c:/Users/李陶/AppData/Roaming/TRAE%20SOLO%20CN/ModularData/ai-agent/work-mode-projects/6abcee34807a00aa83da2398/docs/reports/role-brief-ab-exec-runs.json)（③ 最新）；复现：`python -m agent_builder.evaluation.role_brief_ab_exec --reps 3 --arms off core`
+**三段原始数据快照**：[.before-fix.json](role-brief-ab-exec-runs.before-fix.json)（① 首轮）· [.before-filedelete.json](role-brief-ab-exec-runs.before-filedelete.json)（② 参数契约修复后）· [role-brief-ab-exec-runs.json](role-brief-ab-exec-runs.json)（③ 最新）；复现：`python -m agent_builder.evaluation.role_brief_ab_exec --reps 3 --arms off core`
 
 #### 返工率三段演进（两轮产品修复）
 

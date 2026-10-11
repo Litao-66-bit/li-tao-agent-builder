@@ -207,6 +207,9 @@ class TestPromptAndRisk:
             assert role in text, role
 
     def test_高风险判定取自权限矩阵(self) -> None:
-        assert is_high_risk("code_worker", "file_write") is True
+        # 卡 44：工作区内的写/改不再是审批项（边界由门卫路径沙箱兜底）。
+        assert is_high_risk("code_worker", "file_write") is False
+        assert is_high_risk("operator", "file_delete") is True
+        assert is_high_risk("sub_architect", "git_commit") is True
         assert is_high_risk("searcher", "web_search") is False
         assert is_high_risk("no_such_role", "file_write") is False

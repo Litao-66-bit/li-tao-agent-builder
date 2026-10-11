@@ -205,6 +205,10 @@ class Decomposer:
             f"- depends_on 只能引用本次列出的步骤 id（无依赖为空列表）\n"
             f"- 超过 10 步时合理分组\n"
             f"- 有歧义不猜，把待确认点写进 pending_questions（不要用假设代替）\n"
+            f"- **交付形态要写清**：需求要的是「给人用」的东西时，步骤里必须包含"
+            f"**可打开的入口**（Web → 页面文件 + 提供它的路由；CLI → 可执行入口 + 用法）；"
+            f"需求没说清形态时，把「要 CLI 还是 Web 页面」写进 pending_questions，"
+            f"不要自己默认只做后端\n"
         )
         prompt += _DETAIL_HINTS.get(detail_level, "")
         try:

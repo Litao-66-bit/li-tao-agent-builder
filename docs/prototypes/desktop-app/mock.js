@@ -41,13 +41,13 @@
     {
       id: 'prj-agentbuilder',
       name: 'li-tao-agent-builder',
-      path: 'C:\\Users\\李陶\\…\\work-mode-projects\\6abcee34807a00aa83da2398',
+      path: 'C:\\Users\\<user>\\…\\work-mode-projects\\<project-id>',
       current: true,
     },
     {
       id: 'prj-handover',
       name: 'handover-card-proto',
-      path: 'C:\\Users\\李陶\\Projects\\handover-card-proto',
+      path: 'C:\\Users\\<user>\\Projects\\handover-card-proto',
       current: false,
     },
   ];
@@ -403,17 +403,17 @@
     ['Esc', '关闭菜单 / 对话框'],
   ];
 
-  /* 系统「选择文件夹」对话框的假数据 */
+  /* 系统「选择文件夹」对话框的假数据（用占位用户名，别把本机真实路径提交进仓库） */
   const folderPicker = {
-    path: 'C:\\Users\\李陶',
+    path: 'C:\\Users\\<user>',
     folders: [
-      { name: 'AppData', path: 'C:\\Users\\李陶\\AppData' },
-      { name: 'Documents', path: 'C:\\Users\\李陶\\Documents' },
-      { name: 'Downloads', path: 'C:\\Users\\李陶\\Downloads' },
-      { name: 'Projects', path: 'C:\\Users\\李陶\\Projects' },
-      { name: 'Desktop', path: 'C:\\Users\\李陶\\Desktop' },
+      { name: 'AppData', path: 'C:\\Users\\<user>\\AppData' },
+      { name: 'Documents', path: 'C:\\Users\\<user>\\Documents' },
+      { name: 'Downloads', path: 'C:\\Users\\<user>\\Downloads' },
+      { name: 'Projects', path: 'C:\\Users\\<user>\\Projects' },
+      { name: 'Desktop', path: 'C:\\Users\\<user>\\Desktop' },
     ],
-    selected: 'C:\\Users\\李陶\\Projects',
+    selected: 'C:\\Users\\<user>\\Projects',
   };
 
   window.MOCK = {

@@ -273,3 +273,90 @@ class TestPersistence:
         assert [item.project_id for item in reloaded.list_projects()].count(
             created.project_id
         ) == 1
+
+
+class TestDeleteProject:
+    """回归（实测 2026-10-11）：用户删掉工作区目录后，注册表里留下一堆死条目
+    （点进去就 400），而此前**没有任何删除入口** —— 项目列表因此不可用。"""
+
+    def test_移除已登记的项目(self, client: TestClient, tmp_path: Path) -> None:
+        ws = tmp_path / "ws-del"
+        ws.mkdir()
+        project = _register(client, ws).json()
+        other = tmp_path / "ws-keep"
+        other.mkdir()
+        _register(client, other)  # 登记会把 current 换成 other，于是 ws 可以被移除
+
+        resp = client.delete(f"/projects/{project['project_id']}", headers=LOCAL_HEADERS)
+
+        assert resp.status_code == 200, resp.text
+        ids = [
+            item["project_id"]
+            for item in client.get("/projects", headers=LOCAL_HEADERS).json()["projects"]
+        ]
+        assert project["project_id"] not in ids
+
+    def test_不能移除当前工作区(self, client: TestClient, tmp_path: Path) -> None:
+        """删掉当前项目会让 ``current()`` 回退到内置 default（= 产品源码根）→ 必须拦住。"""
+        ws = tmp_path / "ws-cur"
+        ws.mkdir()
+        project = _register(client, ws).json()  # register 会把它设为当前
+
+        resp = client.delete(f"/projects/{project['project_id']}", headers=LOCAL_HEADERS)
+
+        assert resp.status_code == 400
+        assert "当前" in resp.json()["detail"]
+        # 仍然在册
+        listing = client.get("/projects", headers=LOCAL_HEADERS).json()
+        assert listing["current_project_id"] == project["project_id"]
+
+    def test_不能移除内置默认工作区(self, client: TestClient) -> None:
+        resp = client.delete(f"/projects/{ProjectStore.DEFAULT_ID}", headers=LOCAL_HEADERS)
+
+        assert resp.status_code == 400
+
+    def test_移除不存在的项目返回404(self, client: TestClient) -> None:
+        assert client.delete("/projects/nope", headers=LOCAL_HEADERS).status_code == 404
+
+    def test_只删登记不动磁盘(self, client: TestClient, tmp_path: Path) -> None:
+        ws = tmp_path / "ws-disk"
+        ws.mkdir()
+        (ws / "a.txt").write_text("hi", encoding="utf-8")
+        project = _register(client, ws).json()
+        other = tmp_path / "ws-other"
+        other.mkdir()
+        _register(client, other)
+
+        client.delete(f"/projects/{project['project_id']}", headers=LOCAL_HEADERS)
+
+        assert ws.is_dir(), "移除项目绝不该动磁盘上的目录"
+        assert (ws / "a.txt").read_text(encoding="utf-8") == "hi"
+
+    def test_敏感端点仍需本机标识头(self, client: TestClient, tmp_path: Path) -> None:
+        ws = tmp_path / "ws-hdr"
+        ws.mkdir()
+        project = _register(client, ws).json()
+        other = tmp_path / "ws-hdr2"
+        other.mkdir()
+        _register(client, other)
+
+        assert client.delete(f"/projects/{project['project_id']}").status_code == 403
+
+
+class TestDefaultWorkspaceOverride:
+    """默认工作区可以用 env 指到仓库之外（部署安全 + 测试隔离）。"""
+
+    def test_env_覆盖生效(self, tmp_path: Path, monkeypatch) -> None:
+        from agent_builder.api.projects import default_workspace_dir
+
+        monkeypatch.setenv("AGENT_BUILDER_DEFAULT_WORKSPACE", str(tmp_path))
+
+        assert default_workspace_dir() == tmp_path.resolve()
+
+    def test_覆盖指向不存在的目录时忽略(self, monkeypatch) -> None:
+        from agent_builder.api.projects import default_workspace_dir
+
+        monkeypatch.setenv("AGENT_BUILDER_DEFAULT_WORKSPACE", "Z:/nope-not-here")
+
+        # 忽略无效覆盖，回退到既有逻辑（不抛异常）
+        assert default_workspace_dir().is_dir()

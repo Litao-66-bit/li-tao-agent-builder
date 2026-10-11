@@ -145,6 +145,8 @@ class LoopContext:
             放这里而不是让决策器持有 ``LoopBudget``，是为了避免 deciders ↔ agent_loop 循环 import。
         stall_note: **系统纠正**文案（如「你已连续 N 轮只读，而验证仍失败…」），由
             ``run_agent_loop`` 在检测到「连续只读 + 存在未解决失败」时刷新；空串 = 不提示。
+        follow_ups: **用户追加的修改要求**（卡 50）。与 ``requirement`` 分开标注，
+            否则模型会把"把 X 改成 Y"当成"从头做一遍"——那正是用户最不想要的。
     """
 
     requirement: str
@@ -154,6 +156,9 @@ class LoopContext:
     allow_propose: bool = False
     budget_note: str = ""
     stall_note: str = ""
+    context_note: str = ""
+    workspace_note: str = ""
+    follow_ups: list[str] = field(default_factory=list)
 
 
 class RouteDecider(Protocol):
@@ -532,13 +537,33 @@ def build_decision_prompt(
             "也不会被 lint / 测试扫描到。**只有修改工作区里已有的文件**时才写回它原来的路径"
             "（例如把仓库里那份 `paper_agent.py` 的签名改对）。"
         ),
+        (
+            "12. **交付形态要对齐**：需求涉及「给我用 / 界面 / 前端 / 页面」时，交付物必须包含"
+            "**可打开的入口**（Web：页面文件 + 提供它的路由；CLI：可执行入口 + 用法），"
+            "并说明怎么启动。确实拿不准形态时，就在 answer 里写明「本次交付的是哪一种、"
+            "另一种还没做」，**不要默默只交一个后端库**（实测 2026-10-11：用户要"
+            "「给我做一个 agent」，结果只有 `src/agent.py` + `main.py`，没有任何前端）。"
+        ),
+        (
+            "13. **分阶段交付必须留下接口契约**：如果这个任务只做了一部分（例如只做了后端），"
+            "必须在工作区留下**接口契约**（如 `docs/api-contract.md`：端点 / 字段 / 示例，"
+            "或后端自带的 OpenAPI），并在 answer 里点明「下一步可据此做前端」。"
+            "否则下一个任务只能靠猜字段，前后端接不上（实测 2026-10-11）。"
+        ),
+        (
+            "14. **先读再改 / 再建**：动手之前先看【工作区现状】与【上文】—— 只要工作区里已有"
+            "与本需求相关的文件，**必须先 `file_read` 看懂它**（必要时用 `code_search` / "
+            "`file_list`），再在它基础上继续；**禁止无视已有产出从零重写**。"
+            "实测 2026-10-11：用户说「接着做前端」，模型却不知道上一个任务产出的后端长什么样、"
+            "有哪些字段，结果前后端接不上。"
+        ),
     ]
     if context.allow_propose:
         # 只在门控开启时教这个能力 —— 关闭时教它等于鼓励模型去撞校验。
         lines.extend(
             [
                 (
-                    "12. 若现有角色确实做不到某件事，可用 kind=propose 提议**一个新角色**"
+                    "15. 若现有角色确实做不到某件事，可用 kind=propose 提议**一个新角色**"
                     "（只接受 target=role）："
                 ),
                 (
@@ -560,6 +585,29 @@ def build_decision_prompt(
             f"用户需求：{context.requirement}",
         ]
     )
+    if context.follow_ups:
+        # 卡 50：追加的修改要求必须与**原始需求**分开说清。
+        # 为什么要单列：需求是"做个东西"，追加要求是"把已经做出来的那个东西改成…"。
+        # 混在一起模型会当成新需求重做一遍（用户的原话是"做的不满意也没法改"）。
+        lines.append("")
+        lines.append("【用户追加的修改要求（按时间顺序，**最新一条是当前要做的**）】")
+        lines.append("这些是在任务**已经跑过一轮之后**补充的：请在**已有产物**上改，")
+        lines.append("不要从零重做，也不要新建任务；改完不需要的东西不要动。")
+        for index, item in enumerate(context.follow_ups, 1):
+            lines.append(f"{index}. {item}")
+    if context.context_note:
+        # 多步需求（先做后端 → 再做前端）必须知道上文，否则新任务从零开始、
+        # 与工作区里已有的实现接不上（实测 2026-10-11）。
+        # 内容**逐行第 0 列**原样放（与观察结果同一个道理：缩进即原文，别做排版）。
+        lines.append("")
+        lines.append("【上文】用户在同一个工作区里刚做完的事（不是本次需求，仅供理解上下文；")
+        lines.append("据此判断哪些已经做过，别重复安排）：")
+        lines.extend(context.context_note.splitlines())
+    if context.workspace_note:
+        # 工作区现状：模型必须知道"已经有什么"，否则会重排已完成的事、或从零重写。
+        lines.append("")
+        lines.append("【工作区现状】工作区里**已经有**这些文件（动手前先 `file_read` 看懂相关的）：")
+        lines.extend(context.workspace_note.splitlines())
 
     recent = context.history[-history_window:] if history_window > 0 else []
     if recent:

@@ -4,11 +4,12 @@
 时会被门卫直接判成不可重试失败（E_PERMISSION）。本轮把流程改成：
 
 - **默认直接跑**：`/run` 一调就执行，不需要先确认；
-- **到点暂停**：只有当计划里存在**尚未放行**的高风险步骤（写 / 删除 / 提交 / 回滚）
-  时才挂起（`interrupted` + `pending_approval`），等用户决定；
+- **到点暂停**：只有当计划里存在**尚未放行**的高风险步骤（删除 / 提交 / 回滚，
+  以及**落到工作区外**的写）时才挂起（`interrupted` + `pending_approval`），等用户决定；
 - **放行续跑**：`/resume` 带 `approved_tools` 累积放行后继续，全部放行才真正执行。
 
 安全边界不放松：放行仍走逐工具授权通道，`/approve` 的严格语义保持不变。
+**工作区内的写 / 改不需放行**（卡 44）：写产出文件是本职，边界由路径沙箱硬拒绝。
 """
 
 from __future__ import annotations
@@ -68,8 +69,22 @@ def _seed_plan(client: TestClient, task_id: str, steps: dict[str, Step]) -> None
     entry.conductor.task_state.plan = plan
 
 
+def _delete_plan(target: str) -> dict[str, Step]:
+    """单个 file_delete 步骤（不可逆动作 → 需放行）。
+
+    ``target`` 需为**工作区内绝对路径**（沙箱按 resolve() 判定），且文件要真实存在。
+    """
+    return {
+        "step-001": Step(
+            id="step-001",
+            action="file_delete",
+            inputs={"path": target},
+        )
+    }
+
+
 def _write_plan(target: str) -> dict[str, Step]:
-    """单个 file_write 步骤（属 operator.high_risk_tools，需要放行）。"""
+    """单个 file_write 步骤（**工作区内 → 不需放行**，卡 44）。"""
     return {
         "step-001": Step(
             id="step-001",
@@ -143,44 +158,49 @@ class TestDeliver:
 
 
 class TestPauseOnHighRisk:
+    """到点暂停只对**不可逆 / 越界**的动作生效（卡 44）。"""
+
     def test_未放行时到点暂停且不执行(self, client: TestClient, tmp_path):
-        target = tmp_path / "out.txt"
-        tid = _new_task(client, "写文件")
-        _seed_plan(client, tid, _write_plan(str(target)))
+        target = tmp_path / "victim.txt"
+        target.write_text("keep me", encoding="utf-8")
+        tid = _new_task(client, "删文件")
+        _seed_plan(client, tid, _delete_plan(str(target)))
 
         resp = client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS)
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["status"] == "interrupted"  # 挂起而非失败
-        assert body["pending_approval"]["tools"] == ["file_write"]
+        assert body["pending_approval"]["tools"] == ["file_delete"]
         assert body["pending_approval"]["steps"] == [
-            {"step_id": "step-001", "action": "file_write"}
+            {"step_id": "step-001", "action": "file_delete"}
         ]
         assert body["execution_results"] == []  # 未执行任何步骤
-        assert not target.exists()  # 文件未被写出
+        assert target.exists()  # 文件还在：到点暂停不执行
 
     def test_挂起后resume不带授权仍然挂起(self, client: TestClient, tmp_path):
-        target = tmp_path / "out.txt"
-        tid = _new_task(client, "写文件")
-        _seed_plan(client, tid, _write_plan(str(target)))
+        target = tmp_path / "victim.txt"
+        target.write_text("keep me", encoding="utf-8")
+        tid = _new_task(client, "删文件")
+        _seed_plan(client, tid, _delete_plan(str(target)))
         client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS)
 
         resp = client.post(f"/tasks/{tid}/resume", headers=_LOCAL_HEADERS)
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["status"] == "interrupted"  # 再次挂起
-        assert body["pending_approval"]["tools"] == ["file_write"]
-        assert not target.exists()
+        assert body["pending_approval"]["tools"] == ["file_delete"]
+        assert target.exists()
 
-    def test_放行后resume续跑并落盘(self, client: TestClient, tmp_path):
-        target = tmp_path / "out.txt"
-        tid = _new_task(client, "写文件")
-        _seed_plan(client, tid, _write_plan(str(target)))
+    def test_放行后resume续跑并真的删除(self, client: TestClient, tmp_path):
+        target = tmp_path / "victim.txt"
+        target.write_text("keep me", encoding="utf-8")
+        tid = _new_task(client, "删文件")
+        _seed_plan(client, tid, _delete_plan(str(target)))
         client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS)
 
         resp = client.post(
             f"/tasks/{tid}/resume",
-            json={"approved_tools": ["file_write"]},
+            json={"approved_tools": ["file_delete"]},
             headers=_LOCAL_HEADERS,
         )
         assert resp.status_code == 200, resp.text
@@ -188,27 +208,29 @@ class TestPauseOnHighRisk:
         assert body["pending_approval"] is None
         assert body["status"] == "verifying"
         assert body["execution_results"][0]["status"] == "done"
-        assert target.read_text(encoding="utf-8") == "hello"
+        assert not target.exists()
 
     def test_run时直接携带授权则一次跑完(self, client: TestClient, tmp_path):
-        target = tmp_path / "out.txt"
-        tid = _new_task(client, "写文件")
-        _seed_plan(client, tid, _write_plan(str(target)))
+        target = tmp_path / "victim.txt"
+        target.write_text("keep me", encoding="utf-8")
+        tid = _new_task(client, "删文件")
+        _seed_plan(client, tid, _delete_plan(str(target)))
 
         resp = client.post(
             f"/tasks/{tid}/run",
-            json={"approved_tools": ["file_write"]},
+            json={"approved_tools": ["file_delete"]},
             headers=_LOCAL_HEADERS,
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["status"] == "verifying"
-        assert target.read_text(encoding="utf-8") == "hello"
+        assert not target.exists()
 
     def test_暂停后可以改计划(self, client: TestClient, tmp_path):
         """到点暂停（interrupted）后 /reject 应当放行到 PLANNING，而不是 409。"""
-        target = tmp_path / "out.txt"
-        tid = _new_task(client, "写文件")
-        _seed_plan(client, tid, _write_plan(str(target)))
+        target = tmp_path / "victim.txt"
+        target.write_text("keep me", encoding="utf-8")
+        tid = _new_task(client, "删文件")
+        _seed_plan(client, tid, _delete_plan(str(target)))
         paused = client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS).json()
         assert paused["status"] == "interrupted"
 
@@ -222,7 +244,7 @@ class TestPauseOnHighRisk:
         assert body["interrupted"] is None
         rows = {row["task_id"]: row for row in client.get("/task-summaries").json()}
         assert rows[tid]["has_pending_approval"] is False
-        assert not target.exists()  # 改计划全程未写文件
+        assert target.exists()  # 改计划全程未执行删除
 
     def test_未暂停时改计划仍被拒(self, client: TestClient):
         """状态机边界不放宽：planning 状态下 /reject 仍是 409。"""
@@ -232,30 +254,83 @@ class TestPauseOnHighRisk:
 
     def test_改计划后放行记录清零(self, client: TestClient, tmp_path):
         """改计划 = 作废旧计划的授权：新计划的高风险步骤必须重新逐工具放行。"""
-        target = tmp_path / "out.txt"
-        tid = _new_task(client, "写文件")
-        _seed_plan(client, tid, _write_plan(str(target)))
+        target = tmp_path / "victim.txt"
+        target.write_text("keep me", encoding="utf-8")
+        tid = _new_task(client, "删文件")
+        _seed_plan(client, tid, _delete_plan(str(target)))
         client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS)
         # 放行一个「本计划用不到」的高风险工具：授权被累积，但计划仍有未放行步骤 → 继续挂起。
         resumed = client.post(
             f"/tasks/{tid}/resume",
-            json={"approved_tools": ["file_delete"]},
+            json={"approved_tools": ["git_commit"]},
             headers=_LOCAL_HEADERS,
         ).json()
         assert resumed["status"] == "interrupted"
-        assert get_store().get(tid).approved_tools == {"file_delete"}
+        assert get_store().get(tid).approved_tools == {"git_commit"}
 
         # 改计划 → 放行记录清零（否则旧授权会继承到用户还没看过的新计划上）。
         resp = client.post(f"/tasks/{tid}/reject", headers=_LOCAL_HEADERS)
         assert resp.status_code == 200, resp.text
         assert get_store().get(tid).approved_tools == set()
 
-        # 重新规划同一份计划 → file_write 仍需重新放行（再次「到点暂停」）。
-        _seed_plan(client, tid, _write_plan(str(target)))
+        # 重新规划同一份计划 → file_delete 仍需重新放行（再次「到点暂停」）。
+        _seed_plan(client, tid, _delete_plan(str(target)))
         again = client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS).json()
         assert again["status"] == "interrupted"
-        assert again["pending_approval"]["tools"] == ["file_write"]
-        assert not target.exists()
+        assert again["pending_approval"]["tools"] == ["file_delete"]
+        assert target.exists()
+
+
+class TestWorkspaceWritesDoNotPause:
+    """卡 44 验收：工作区内的写/改**不再逐次审批**，越界写仍拦得住。"""
+
+    def test_工作区内写文件不挂起且真的落盘(self, client: TestClient, tmp_path):
+        target = tmp_path / "note.txt"
+        tid = _new_task(client, "写文件")
+        _seed_plan(client, tid, _write_plan(str(target)))
+
+        resp = client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["pending_approval"] is None
+        assert body["status"] == "verifying"
+        assert body["execution_results"][0]["status"] == "done"
+        assert target.read_text(encoding="utf-8") == "hello"
+
+    def test_同一任务改计划后再写也不再挂起(self, client: TestClient, tmp_path):
+        """「放行一次以后不再问」在卡 44 之后变成「根本不用问」。
+
+        走一条真实可达的路径：写成功（verifying）→``/deliver`` 收尾，全程无待放行；
+        再在**另一个任务**里写第二个文件，同样不挂起（跨任务也不该逐次审批）。
+        """
+        first_target = tmp_path / "note.txt"
+        second_target = tmp_path / "note2.txt"
+        tid = _new_task(client, "写两次")
+        _seed_plan(client, tid, _write_plan(str(first_target)))
+        first = client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS).json()
+        assert first["pending_approval"] is None
+        assert first["execution_results"][0]["status"] == "done"
+        assert first_target.read_text(encoding="utf-8") == "hello"
+
+        tid2 = _new_task(client, "再写一次")
+        _seed_plan(client, tid2, _write_plan(str(second_target)))
+        second = client.post(f"/tasks/{tid2}/run", headers=_LOCAL_HEADERS).json()
+        assert second["pending_approval"] is None
+        assert second_target.read_text(encoding="utf-8") == "hello"
+
+    def test_越界写拦在放行之前且不落盘(self, client: TestClient, tmp_path):
+        """安全边界：工作区**外**的写路径绝不能被执行（拦在"等放行"那一步）。"""
+        outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
+        tid = _new_task(client, "往工作区外写")
+        _seed_plan(client, tid, _write_plan(str(outside)))
+
+        resp = client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert not outside.exists(), "越界写必须拦下，一个字节都不能落盘"
+        assert body["pending_approval"] is not None
+        assert body["pending_approval"]["tools"] == ["file_write"]
+        assert body["status"] == "interrupted"
 
 
 class TestResumeDoesNotReplay:
@@ -289,9 +364,10 @@ class TestTaskSummaries:
         assert rows[tid]["has_pending_approval"] is False
 
     def test_挂起任务在列表中标记(self, client: TestClient, tmp_path):
-        target = tmp_path / "out.txt"
-        tid = _new_task(client, "写文件")
-        _seed_plan(client, tid, _write_plan(str(target)))
+        target = tmp_path / "victim.txt"
+        target.write_text("keep me", encoding="utf-8")
+        tid = _new_task(client, "删文件")
+        _seed_plan(client, tid, _delete_plan(str(target)))
         client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS)
 
         rows = {row["task_id"]: row for row in client.get("/task-summaries").json()}

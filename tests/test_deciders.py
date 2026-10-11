@@ -589,3 +589,70 @@ class Test失败观察保尾:
         assert observation_was_truncated("…（原文 5000 字 / 共 1 行；…")
         assert not observation_was_truncated("1 passed in 0.01s")
         assert not observation_was_truncated(None)
+
+
+class Test上下文进提示词:
+    """卡 36：新任务必须能在提示词里看到「上文」，否则多步需求接不上。"""
+
+    def test_有上文时渲染上文段(self) -> None:
+        context = _context()
+        context.context_note = "- 上一轮需求：先做后端\n- 已产出文件：src/agent.py"
+        prompt = build_decision_prompt(context)
+
+        assert "【上文】" in prompt
+        assert "src/agent.py" in prompt
+        # 逐行第 0 列原样（缩进即原文）
+        assert "\n- 已产出文件：src/agent.py" in prompt
+
+    def test_没有上文时不渲染空段(self) -> None:
+        prompt = build_decision_prompt(_context())
+
+        assert "【上文】用户在同一个工作区里刚做完的事" not in prompt
+
+
+class Test交付形态与接口契约规则:
+    """卡 39：agentic 硬性规则要钉住「交付形态」与「分阶段接口契约」两条。"""
+
+    def test_规则要求对齐交付形态(self) -> None:
+        prompt = build_decision_prompt(_context())
+
+        assert "12. **交付形态要对齐**" in prompt
+        assert "可打开的入口" in prompt
+
+    def test_规则要求留下接口契约(self) -> None:
+        prompt = build_decision_prompt(_context())
+
+        assert "13. **分阶段交付必须留下接口契约**" in prompt
+        assert "api-contract.md" in prompt
+
+    def test_propose规则编号顺延不冲突(self) -> None:
+        prompt = build_decision_prompt(_context(allow_propose=True))
+
+        assert "15. 若现有角色确实做不到某件事" in prompt
+        assert "12. **交付形态要对齐**" in prompt
+
+
+class Test工作区现状进提示词:
+    """卡 42：模型必须知道"工作区里已经有什么"，并被要求**先读再改**。"""
+
+    def test_渲染工作区现状段(self) -> None:
+        context = _context()
+        context.workspace_note = "outputs/"
+        prompt = build_decision_prompt(context)
+
+        assert "【工作区现状】" in prompt
+        assert "outputs/" in prompt
+
+    def test_没有工作区现状时不渲染空段(self) -> None:
+        assert "【工作区现状】工作区里**已经有**这些文件" not in build_decision_prompt(_context())
+
+    def test_规则要求先读再改(self) -> None:
+        prompt = build_decision_prompt(_context())
+
+        assert "14. **先读再改 / 再建**" in prompt
+        assert "禁止无视已有产出从零重写" in prompt
+
+    def test_propose规则顺延到15(self) -> None:
+        prompt = build_decision_prompt(_context(allow_propose=True))
+
+        assert "15. 若现有角色确实做不到某件事" in prompt

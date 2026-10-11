@@ -6,8 +6,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from agent_builder.api.agent_loop import MAX_BUDGET_STEPS_LIMIT
 from agent_builder.api.secrets import MAX_TTL_S
 from agent_builder.contracts.schemas import ChangeProposal
+from agent_builder.tools.permissions import CAPABILITY_GROUPS
 
 # 模型名长度上限（防超长输入被带进请求头 / 提示词）。
 MAX_MODEL_CHARS = 64
@@ -21,6 +23,18 @@ class TaskCreateRequest(BaseModel):
 
     requirement: str = Field(description="用户需求文本")
     task_id: str | None = Field(default=None, description="可选任务 ID，不传则自动生成")
+    context: str = Field(
+        default="",
+        description=(
+            "**上文**（可选）：本次需求之前、用户在同一个工作区里刚做完的事"
+            "（上一任务的需求 / 结论 / 已产出文件）。用来让「先做后端 → 再做前端」这类"
+            "多步需求接得上；**只进提示词，不改变任务语义**。超长会被截断并注明"
+        ),
+    )
+    parent_task_id: str | None = Field(
+        default=None,
+        description="上一个任务的 ID（可选）：便于审计「这句话是接着谁说的」",
+    )
 
 
 class ChatTurn(BaseModel):
@@ -66,30 +80,85 @@ class ChatResponse(BaseModel):
     reason: str = Field(default="", description="一句话判定理由（审计与排查用）")
 
 
+class DirectChatRequest(BaseModel):
+    """**直连大模型**请求（「LLM 拆分」开启时使用）。
+
+    语义：把大模型与它后面的工作流**拆开** —— 前端只跟模型对话。因此本请求
+    **不涉及任何任务**：不建任务、不规划、不执行、不过门卫、不落盘、不写项目日志。
+    与 ``/chat`` 的边界：``/chat`` 是"闲聊 vs 执行诉求"的**分流**（可能转任务链路）；
+    直连**永远是对话**。
+    """
+
+    messages: list[ChatTurn] = Field(
+        default_factory=list,
+        description="多轮对话（role/content），按顺序**原样**转发给模型，不做任何提示词装饰",
+    )
+    message: str = Field(default="", description="本轮用户输入；会接在 messages 之后转发")
+    system: str = Field(default="", description="可选 system 段（前端一般不传）")
+    model: str | None = Field(default=None, description="模型名覆盖")
+    temperature: float | None = Field(
+        default=None, ge=0.0, le=1.0, description="采样温度 0–1"
+    )
+
+
+class DirectChatResponse(BaseModel):
+    """直连大模型响应。"""
+
+    reply: str = Field(description="模型回复原文（不做二次加工，直接展示）")
+    model: str = Field(default="", description="请求指定的模型名（空 = 用服务端默认）")
+    duration_ms: int = Field(default=0, description="本次调用的墙钟耗时（毫秒）")
+    usage: dict[str, Any] = Field(
+        default_factory=dict, description="本次调用的 token 用量（取不到则为空表）"
+    )
+
+
 class PlanRequest(BaseModel):
     """触发分解/规划请求。
 
-    底部栏的「模型 / 推理强度 / 高级 / 副结构自检」经此透传到后端并真实生效：
-    - ``model`` / ``temperature`` → LLM 客户端（作用于本次分解调用）；
-    - ``advanced`` → 分解器提示词详细度（detailed 更细、concise 更少）；
-    - ``self_check`` → 执行阶段追加一次「计划 ↔ 执行结果」一致性自检。
+    **每个字段都写明"什么时候才真正生效"**（卡 46b）—— 底部栏以前只画开关、
+    不说条件，于是用户"不知道这些开关到底有没有用"（实测四个人里三个在默认模式下空转）。
+
+    底部栏选项的生效条件：
+
+    - ``model`` / ``temperature`` → LLM 客户端；**任何需要调用模型的环节都生效**，
+      但 agentic 模式下**规划阶段不调模型**，所以它们实际作用于执行阶段；
+    - ``advanced`` → 分解器提示词详细度（detailed 更细 / concise 更少）；
+      ⚠️ **只在真正跑分解器时生效**，即 ``mode=workflow`` 或无密钥回退固定工作流时；
+    - ``use_llm`` → 是否调用 LLM **拆分需求**；⚠️ 同样只在分解路径生效，
+      agentic 有密钥时规划阶段**刻意不分解**（这就是"规划去工作流化"），
+      所以它在默认模式下**不代表"任务会不会用模型"**（执行阶段永远由模型驱动）；
+    - ``self_check`` → 执行收尾时追加一次「计划 ↔ 执行结果」一致性自检；**两种模式都生效**；
+    - ``council`` → 规划前先召开评审会（多角色独立表态后收敛）；**两种模式都生效**（需密钥）；
+    - ``sub_arch`` → 副结构门控：关闭时模型只能调用主架构角色，开启后才允许 ``kind=propose``；
+      只在 agentic 且模型可用时有意义；
+    - ``capabilities`` → 任务级能力开关；两种模式都生效。
 
     执行形态（P1 新增）：
     - ``mode`` → ``agentic``（默认，由模型逐轮决策选 agent）/ ``workflow``（固定工作流）；
       两者都随 ``/plan`` 存入任务选项，执行阶段（``/run`` / ``/approve`` / ``/resume``）读取。
       无可用密钥时 ``agentic`` 自动回退固定工作流（行为与今天一致）。
-    - ``sub_arch`` → 副结构开关：关闭时模型只能调用主架构角色；开启后才允许
-      ``kind=propose`` 提议新角色 / 新工具（与「副结构自检」是两件事）。
+
+    每次 ``/plan`` 的响应里都会带 ``effective_options``：**本次实际生效的选项**清单
+    （含"不适用"的原因），界面据此如实标注，而不是让用户猜。
     """
 
-    use_llm: bool = Field(default=False, description="是否调用 LLM 拆分需求")
+    use_llm: bool = Field(
+        default=False,
+        description=(
+            "是否调用 LLM 拆分需求。**只在分解路径生效**（mode=workflow，或 agentic 无密钥回退时）；"
+            "agentic 且有密钥时规划阶段不分解，本字段对规划无影响"
+        ),
+    )
     mode: Literal["agentic", "workflow"] = Field(
         default="agentic",
         description="执行形态：agentic（模型逐轮决策选 agent）| workflow（固定工作流）",
     )
     sub_arch: bool = Field(
         default=False,
-        description="副结构开关：允许模型提议新角色 / 新工具（关闭时只可调用主架构角色）",
+        description=(
+            "副结构开关：允许模型提议新角色 / 新工具（关闭时只可调用主架构角色）；"
+            "**只在 agentic 且模型可用时有效**（固定工作流不产生提议）"
+        ),
     )
     model: str | None = Field(
         default=None, description="模型名覆盖；不传则用 DEEPSEEK_MODEL（默认 deepseek-chat）"
@@ -98,19 +167,48 @@ class PlanRequest(BaseModel):
         default=None, ge=0.0, le=1.0, description="采样温度 0–1（前端「推理强度」滑块）"
     )
     advanced: AdvancedLevel = Field(
-        default="default", description="产出详细度：default | detailed | concise"
+        default="default",
+        description=(
+            "产出详细度：default | detailed | concise。"
+            "⚠️ **只在跑分解器时生效**（mode=workflow 或无密钥回退）；agentic 规划阶段不适用"
+        ),
     )
     self_check: bool = Field(
-        default=False, description="是否在执行阶段追加「计划 ↔ 执行结果」一致性自检"
+        default=False,
+        description=(
+            "是否在执行收尾时追加「计划 ↔ 执行结果」一致性自检（纯计算，不参与决策）；"
+            "**agentic 与固定工作流都生效**"
+        ),
     )
     council: bool = Field(
-        default=False, description="是否在分解前先召开评审会（多角色独立表态后收敛）"
+        default=False,
+        description="是否在分解前先召开评审会（多角色独立表态后收敛）；两种模式都生效（需密钥）",
     )
     role_brief: Literal["off", "core", "full"] | None = Field(
         default=None,
         description=(
             "角色简报档位覆盖（A/B 对照用）：off / core / full；"
             "不传则用环境变量 AGENT_BUILDER_ROLE_BRIEF（默认 off）"
+        ),
+    )
+    capabilities: list[str] | None = Field(
+        default=None,
+        description=(
+            "**任务级能力开关**（卡 45）：列出本任务启用的能力组（见 GET /capabilities）。"
+            "不传 / None = 全部启用（保持既有行为）；传了 = 只有列出的组可用。"
+            "真实生效方式有两条：① 执行时把该组的工具从角色白名单里剔除（`build_step_executor`），"
+            "② 规划/执行的能力目录里**不再出现**该组的动作（否则模型看得见、调了才失败）。"
+            "组名必须在 CAPABILITY_GROUPS 里，否则 422。"
+        ),
+    )
+    max_steps: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_BUDGET_STEPS_LIMIT,
+        description=(
+            "**步数预算**（agentic 循环的硬顶）；不传 = 默认 20 步。"
+            "跑满后循环停下并**问用户**要不要再来一轮（`POST /tasks/{id}/continue`，默认 +20），"
+            "而不是直接判死。传大些可以一次给足，但上限受 MAX_BUDGET_STEPS_LIMIT（200）约束"
         ),
     )
 
@@ -129,6 +227,74 @@ class PlanRequest(BaseModel):
             raise ValueError("model 不能包含空白字符")
         return cleaned
 
+    @field_validator("capabilities")
+    @classmethod
+    def _validate_capabilities(cls, value: list[str] | None) -> list[str] | None:
+        """能力组名必须真实存在 —— **不静默忽略**未知组名。
+
+        为什么必须报错：界面上的开关如果打错一个字母，静默忽略会变成"开关看着关了、其实没关"，
+        正是卡 45 要消灭的那类欺骗性 UI。
+        """
+        if value is None:
+            return None
+        unknown = sorted({str(item) for item in value} - set(CAPABILITY_GROUPS))
+        if unknown:
+            raise ValueError(
+                f"未知能力组: {unknown}；可选: {sorted(CAPABILITY_GROUPS)}"
+            )
+        return sorted({str(item) for item in value})
+
+
+
+class TaskInstructRequest(BaseModel):
+    """在**同一个任务**上追加修改要求（卡 50）。
+
+    语义边界：这不是"新建任务"，而是"对已有产物继续说一句" ——
+    后端把指令挂到该任务的 ``follow_ups`` 上（与原始需求分开进提示词），
+    再把任务摆回执行态复用**已有的** agentic 循环。
+
+    ``wait=false`` 时立刻返回（``running=true``），执行放后台线程 —— 与 ``/run`` / ``/resume`` 同款。
+    """
+
+    instruction: str = Field(
+        description=(
+            "追加的修改要求（人话，如「把 result.txt 里的标题改成二级标题」）。"
+            "会与**原始需求分开**标注给模型，避免它把这句当成新需求从头重做"
+        )
+    )
+    wait: bool = Field(
+        default=True,
+        description="true = 同步跑到本次循环结束；false = 立刻返回，前端轮询着边跑边渲染",
+    )
+
+
+class TaskContinueRequest(BaseModel):
+    """**用户决定"再来一轮预算"**（卡：预算用满后由用户拍板，而不是直接判死）。
+
+    背景：步数预算是硬顶（默认 20 步）。跑满后循环停下（``stopped_reason=budget_steps``），
+    此前界面**只给「放弃任务」**一个出口 —— 等于"跑满预算 = 直接判死"。
+    但"20 步没收敛"不等于"这事做不成"（实测常见是差几步收尾），所以改成停下来问用户。
+
+    ``additional_steps``：本次追加多少步（默认 ``BUDGET_STEP_INCREMENT`` = 20）。
+    **只增不减**，且总量受 ``MAX_BUDGET_STEPS_LIMIT`` 约束。
+    """
+
+    additional_steps: int = Field(
+        default=0,
+        ge=0,
+        le=1000,
+        description=(
+            "本次追加的步数；0 = 用默认增量（BUDGET_STEP_INCREMENT，20 步）。"
+            "上限受 MAX_BUDGET_STEPS_LIMIT（200 步）约束"
+        ),
+    )
+    wait: bool = Field(
+        default=True,
+        description=(
+            "true = 同步跑到本次循环结束；false = 立刻返回（``running=true``），"
+            "执行放后台线程，前端轮询着边跑边渲染（与 ``/run`` / ``/resume`` 同款）"
+        ),
+    )
 
 
 class InterruptRequest(BaseModel):
@@ -210,6 +376,21 @@ class ApiKeyStatusResponse(BaseModel):
     rotated_from_fingerprint: str | None = Field(
         default=None, description="本次轮换前的旧密钥指纹；仅轮换响应填充"
     )
+    source: str = Field(
+        default="none",
+        description=(
+            "当前密钥的**来源**（卡 47）：``runtime`` = 本次进程内经 POST 保存；"
+            "``env`` = 启动时从 DEEPSEEK_API_KEY 读入；``file`` = 从落盘文件读入；"
+            "``none`` = 没有可用密钥。用来解释「为什么重启后密钥没了」这类困惑"
+        ),
+    )
+    persisted: bool = Field(
+        default=False,
+        description=(
+            "是否已落盘（重启后仍可用）。**默认 false** —— 落盘是显式开启的可选项，"
+            "因为它与「密钥只驻内存」的既有安全约束相反（见 api/secret_store.py 的说明）"
+        ),
+    )
 
 
 # 状态响应允许出现的字段全集（全部为派生自密钥的非敏感值）。
@@ -225,6 +406,8 @@ API_KEY_STATUS_FIELDS: frozenset[str] = frozenset(
         "rotation_count",
         "rotated_at",
         "rotated_from_fingerprint",
+        "source",
+        "persisted",
     }
 )
 
@@ -382,6 +565,32 @@ class TaskResponse(BaseModel):
         default="",
         description="可读的执行计划（agentic 下由 /plan 生成）；供刷新 / 回看重建计划区块",
     )
+    parent_task_id: str = Field(
+        default="",
+        description="本任务接着哪个任务说的（续接归因）；无上文时为空串",
+    )
+    context_chars: int = Field(
+        default=0,
+        description=(
+            "本次任务实际带上的「上文」字数（0 = 没带上）。它由**后端**从工作区级项目日志"
+            "自动注入，前端据此如实告知用户「是否带上了本项目的历史」"
+        ),
+    )
+    follow_ups: list[str] = Field(
+        default_factory=list,
+        description=(
+            "**用户追加的修改要求**（卡 50，按时间顺序）：任务跑完之后，用户在**同一个任务**上"
+            "继续说「把 X 改成 Y」的那些话。它们与原始需求分开进提示词"
+            "（模型据此知道是在已有产物上改、不是从零重做），同时供界面回看"
+        ),
+    )
+    budget_extensions: int = Field(
+        default=0,
+        description=(
+            "用户点过几次「继续再跑一轮」（步数预算上浮）。用于回看与成本归因 —— "
+            "续跑是**用户显式追加**的支出，不该混进「模型自己烧的」里"
+        ),
+    )
     running: bool = Field(
         default=False,
         description=(
@@ -449,6 +658,21 @@ class CouncilRequest(BaseModel):
     )
 
 
+class EffectiveOption(BaseModel):
+    """一个底部栏选项在**本次**任务里的真实生效情况（卡 46b）。
+
+    为什么要有：以前界面只画开关，不说条件，用户"不知道这些开关到底有没有用" ——
+    实测四个开关里两个（加 advanced 共三个）在默认 agentic 模式下完全空转，
+    界面却毫无说明。这里把事实回传给界面，由它**如实标注**（不适用的置灰 + 说明原因）。
+    """
+
+    option: str = Field(description="选项名（与 PlanRequest 字段同名，便于界面按名对上）")
+    label: str = Field(description="中文名（界面上那个开关的文案）")
+    applied: bool = Field(description="本次是否真的影响了什么")
+    detail: str = Field(description="一句话说明：生效在哪 / 为什么不适用")
+    value: Any = Field(default=None, description="本次请求里该选项的取值")
+
+
 class DecomposeResponse(BaseModel):
     """分解结果响应。"""
 
@@ -459,6 +683,13 @@ class DecomposeResponse(BaseModel):
         description=(
             "本次生效的执行形态（回显请求）。``agentic`` 下**没有预先分解的 DAG** —— "
             "步骤由模型逐轮长出来，所以 ``steps`` 为空是正常结果（前端不该当成「暂无计划」）"
+        ),
+    )
+    effective_options: list[EffectiveOption] = Field(
+        default_factory=list,
+        description=(
+            "**本次实际生效的选项**清单（卡 46b）：每项含 applied / detail（含不适用原因）。"
+            "界面据此如实标注，并在底部栏显示「本次实际生效的选项」"
         ),
     )
     steps: dict[str, Any] = Field(default_factory=dict)
@@ -602,12 +833,76 @@ class HandoverResponse(BaseModel):
     next_actions: list[str] = Field(default_factory=list)
 
 
+class CapabilityGroupView(BaseModel):
+    """一个**真实存在**的能力组（卡 45）。
+
+    左栏「技能」面板的每一项都必须能追到这里 —— 不允许再有"没有出处的开关"。
+    """
+
+    group: str = Field(description="能力组标识（也是 PlanRequest.capabilities 里用的名字）")
+    label: str = Field(description="中文名（界面直接用，不写死在前端）")
+    note: str = Field(default="", description="一句话说明（做 tooltip）")
+    tools: list[str] = Field(
+        default_factory=list, description="该组包含的工具（**注册表里真实存在的**）"
+    )
+    high_risk_tools: list[str] = Field(
+        default_factory=list, description="该组里需逐次放行的工具（删除 / 提交 / 回滚）"
+    )
+    roles: list[str] = Field(
+        default_factory=list,
+        description="该组工具被实授的角色（关掉该组后这些角色就调不到了）",
+    )
+
+
+class PluginItem(BaseModel):
+    """插件项。
+
+    ⚠️ **当前后端没有任何插件系统**，所以这里始终是空列表 ——
+    界面必须如实显示"规划中"，不许再写死「海报生成 / 网页抓取 / Git 集成」这类假条目。
+    """
+
+    name: str
+    note: str = ""
+
+
+class CapabilitiesResponse(BaseModel):
+    """`GET /capabilities`：**真实**能力清单（卡 45）。
+
+    真源是 ``tools/permissions.py`` 的权限矩阵与能力组映射，**没有一行是写死的展示文案**：
+    - ``capability_groups``：界面「技能」开关的每一项 = 一个能力组 → 一组真实工具；
+    - ``roles``：角色 → 工具白名单（含高危项），供排查"这个角色到底能做什么"；
+    - ``plugins``：始终为空 + ``plugins_note`` 说明（如实标注，不假装有）。
+    """
+
+    workspace: str = Field(description="当前工作区绝对路径（能力清单按它取）")
+    default_capabilities: list[str] = Field(
+        default_factory=list, description="默认启用的能力组（不传 capabilities 时等价于这一组）"
+    )
+    capability_groups: list[CapabilityGroupView] = Field(default_factory=list)
+    roles: dict[str, list[str]] = Field(
+        default_factory=dict, description="角色 → 工具白名单（含高危项）"
+    )
+    high_risk_tools: list[str] = Field(
+        default_factory=list, description="全部需逐次放行的工具（跨角色并集）"
+    )
+    plugins: list[PluginItem] = Field(
+        default_factory=list, description="插件清单；**当前恒为空**（后端未实现插件系统）"
+    )
+    plugins_note: str = Field(
+        default="",
+        description="插件区的如实说明（界面必须把它显示出来，而不是画假条目）",
+    )
+
+
 __all__ = [
     "ApiKeyRequest",
     "ApiKeyStatusResponse",
+    "CapabilitiesResponse",
+    "CapabilityGroupView",
     "CouncilRequest",
     "DecomposeResponse",
     "DirectoryPickResponse",
+    "EffectiveOption",
     "ErrorResponse",
     "FileContentResponse",
     "FileNode",
@@ -622,6 +917,7 @@ __all__ = [
     "LoopRoundResult",
     "LoopState",
     "PlanRequest",
+    "PluginItem",
     "ProjectCreateRequest",
     "ProjectListResponse",
     "ProjectMkdirRequest",
@@ -629,6 +925,8 @@ __all__ = [
     "ProposalView",
     "StepResult",
     "TaskApproveRequest",
+    "TaskContinueRequest",
     "TaskCreateRequest",
+    "TaskInstructRequest",
     "TaskResponse",
 ]

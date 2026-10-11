@@ -111,7 +111,15 @@ const api = {
   // 无副作用、不建任务；无密钥时后端如实回一句中文提示，不会回退成固定工作流。
   chat: (message, history = [], options = {}) =>
     api.request('POST', '/chat', { message, history, ...options }, LLM_TIMEOUT_MS),
-  createTask: (requirement) => api.request('POST', '/tasks', { requirement }),
+  // 「LLM 拆分」：直连大模型（不建任务、不走工作流、不过门卫）。
+  directChat: (payload) => api.request('POST', '/llm/chat', payload, LLM_TIMEOUT_MS),
+  // context / parentTaskId：续接上一个任务时带上的「上文」（见 app.js buildContinuationContext）。
+  createTask: (requirement, opts = {}) =>
+    api.request('POST', '/tasks', {
+      requirement,
+      ...(opts.context ? { context: opts.context } : {}),
+      ...(opts.parentTaskId ? { parent_task_id: opts.parentTaskId } : {}),
+    }),
   getTask: (id) => api.request('GET', `/tasks/${id}`),
   // 删除任务：对应 DELETE /tasks/{id}（不存在 → 404；不触发执行副作用）。
   deleteTask: (id) => api.request('DELETE', `/tasks/${id}`),
@@ -147,12 +155,28 @@ const api = {
       LLM_TIMEOUT_MS,
     ),
   abortTask: (id) => api.request('POST', `/tasks/${id}/abort`),
+  // 预算用满后**由用户决定**是否再来一轮（不直接判死）。
+  continueTask: (id, opts = {}) =>
+    api.request(
+      'POST',
+      `/tasks/${id}/continue`,
+      {
+        ...(opts.additionalSteps ? { additional_steps: opts.additionalSteps } : {}),
+        ...(opts.wait === false ? { wait: false } : {}),
+      },
+      LLM_TIMEOUT_MS,
+    ),
+  // 卡 50：在**同一个任务**上追加修改要求（"不满意就改"闭环；不新建任务）。
+  instructTask: (id, instruction) =>
+    api.request('POST', `/tasks/${id}/instruct`, { instruction }, LLM_TIMEOUT_MS),
   // 确认交付：agentic 收敛后停在 verifying 的**唯一出口**（verifying → delivered）。
   deliverTask: (id) => api.request('POST', `/tasks/${id}/deliver`),
   // 副结构提议的决定：批准会把脚手架写入工作区，拒绝只记录决定。
   approveProposal: (id) => api.request('POST', `/tasks/${id}/proposal/approve`),
   rejectProposal: (id) => api.request('POST', `/tasks/${id}/proposal/reject`),
   getWorkspaceFiles: () => api.request('GET', '/workspace/files'),
+  // 真实能力清单（卡 45）：左栏技能面板的唯一数据来源；插件清单恒为空 + 说明。
+  getCapabilities: () => api.request('GET', '/capabilities'),
   readWorkspaceFile: (path) => api.request('GET', `/workspace/file?path=${encodeURIComponent(path)}`),
   writeWorkspaceFile: (path, content) =>
     api.request('PUT', `/workspace/file?path=${encodeURIComponent(path)}`, { content }),

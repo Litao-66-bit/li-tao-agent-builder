@@ -47,8 +47,10 @@ class TestFileListFunctional:
         call = registry.execute(gatekeeper, _make_call("operator", workspace))
         result = call.result
         lines = result.split("\n")
-        # 目录在前，文件在后；各自按名称排序
-        assert lines[0] == "[DIR]  subdir/"
+        # 目录在前，文件在后；各自按名称排序。
+        # 卡 48：目录**带上条目数** —— 只给 `[DIR] subdir/` 时模型看不出里面有多大，
+        # 只能盲目下钻或直接跳过。这里 subdir 是空的，所以是 (0 项)。
+        assert lines[0] == "[DIR]  subdir/  (0 项)"
         assert lines[1] == "[FILE] a.txt (3 bytes)"
         assert lines[2] == "[FILE] b.txt (3 bytes)"
         assert call.status == "executed"
@@ -77,8 +79,14 @@ class TestFileListFunctional:
         (workspace / "d2").mkdir()
         call = registry.execute(gatekeeper, _make_call("operator", workspace))
         lines = call.result.split("\n")
-        assert lines[0] == "[DIR]  d1/"
-        assert lines[1] == "[DIR]  d2/"
+        assert lines[0] == "[DIR]  d1/  (0 项)"
+        assert lines[1] == "[DIR]  d2/  (0 项)"
+
+        # 反证（卡 48 的目的）：目录里有东西时，条目数必须如实反映出来。
+        (workspace / "d1" / "x.txt").write_text("x", encoding="utf-8")
+        (workspace / "d1" / "y.txt").write_text("y", encoding="utf-8")
+        again = registry.execute(gatekeeper, _make_call("operator", workspace)).result
+        assert "[DIR]  d1/  (2 项)" in again
 
     def test_list_nested_subdir(self, gatekeeper, workspace):
         sub = workspace / "parent"
@@ -189,9 +197,13 @@ class TestFileListCost:
             (workspace / f"file_{i:04d}.txt").write_text("x", encoding="utf-8")
         call = registry.execute(gatekeeper, _make_call("operator", workspace))
         result = call.result
-        assert "已截断" in result
-        # 截断后的行数不应超过 MAX_ENTRIES + 1（截断提示行）
         lines = result.split("\n")
+        # 卡 48：截断信息放到**第一行** —— 观察窗口只保头部，写在末尾会跟着尾巴一起被丢掉
+        # （实测：200 条匹配 / 1.2 万字的输出被裁到 2000 字，末尾的提示根本进不了提示词）。
+        assert lines[0].startswith("…[共 ")
+        assert "仅显示前" in lines[0]
+        assert "600 条目" in lines[0] or f"{MAX_ENTRIES + 100} 条目" in lines[0]
+        # 截断后的行数不应超过 MAX_ENTRIES + 1（截断提示行）
         assert len(lines) <= MAX_ENTRIES + 1
 
 

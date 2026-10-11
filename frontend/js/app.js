@@ -579,6 +579,7 @@ function resetActiveView() {
   currentStopReason = '';
   conclusionBlockEl = null;
   planTextBlockEl = null;
+  lastArtifactSignature = '';
   lastProcessTask = null;
   thinkingEl = null;
   const log = document.getElementById('chatLog');
@@ -974,6 +975,8 @@ function updateTaskStatus(status) {
   // 计划区块的「改计划」入口依赖状态（仅在 awaiting_confirm 时可改）。
   renderPlanBlock(planState);
   updateStatusTask();
+  // 卡 50：状态变了就刷新"继续改这个任务"的可用性（含输入框旁的提示）。
+  refreshFollowUpEligibility(status);
 }
 
 /** 乐观把「当前任务」置为执行中（发 /run、/resume 之前调用）。
@@ -987,6 +990,7 @@ function markTaskRunning(taskId) {
   if (taskId && taskId !== currentTaskId) return;
   currentPendingApproval = null;
   currentStopReason = '';
+  currentTaskRunning = true;
   updateTaskStatus('executing');
 }
 
@@ -1020,6 +1024,18 @@ function updateStatusTask() {
     : '任务：未创建';
 }
 
+/** 卡 50：按任务状态判断"还能不能继续改这个任务"。
+ *
+ * 与后端 ``/instruct`` 允许的状态**对齐**：verifying（跑完待交付）与 interrupted
+ * （到点暂停 / 用户中断）可以；executing / 未执行 / 终态（delivered、failed）不行。
+ * 前端提前判定只是为了**给对提示**，真正的把关仍在后端（它会给可读的 409）。
+ */
+function refreshFollowUpEligibility(status) {
+  const value = typeof status === 'string' ? status : (currentStatus || '');
+  taskFollowUpEligible = value === 'verifying' || value === 'interrupted';
+  refreshContinueHint();
+}
+
 /** 状态栏：当前模型。 */
 function updateStatusModel() {
   if (statusModelEl) statusModelEl.textContent = `模型：${modelSelect ? modelSelect.value : '—'}`;
@@ -1028,6 +1044,62 @@ function updateStatusModel() {
 /** 状态栏：当前工作区。 */
 function updateStatusProject() {
   if (statusProjectEl) statusProjectEl.textContent = `📁 ${currentWorkspaceLabel || '—'}`;
+}
+
+/** 把开关恢复到"未标注"状态（切任务 / 重新规划前调用，避免留着上一个任务的结论）。 */
+function clearEffectiveOptions() {
+  document.querySelectorAll('.setting-chip.is-na').forEach((chip) => {
+    chip.classList.remove('is-na');
+  });
+  const hint = document.getElementById('effectiveHint');
+  if (hint) {
+    hint.hidden = true;
+    hint.textContent = '';
+  }
+}
+
+/** 按后端回传的「本次实际生效的选项」如实标注每个开关（卡 46b）。
+ *
+ * 以前界面只画开关、不说条件：实测四个开关里两个（加 advanced 共三个）在默认 agentic 下
+ * 完全空转。现在**不适用就置灰 + 说明原因**，把事实摆出来而不是让用户猜。
+ *
+ * 不适用**不等于**禁用：切回适用模式（如 mode=workflow）后它立刻生效，
+ * 所以只降视觉权重、不 disabled（否则用户会以为功能坏了）。
+ */
+function applyEffectiveOptions(options) {
+  clearEffectiveOptions();
+  if (!Array.isArray(options) || !options.length) return;
+  const chipByOption = {
+    council: councilToggleEl ? councilToggleEl.closest('.setting-chip') : null,
+    self_check: selfCheckToggleEl ? selfCheckToggleEl.closest('.setting-chip') : null,
+    sub_arch: subArchChipEl,
+    advanced: advancedSelect ? advancedSelect.closest('.setting-chip') : null,
+  };
+  const parts = [];
+  options.forEach((item) => {
+    const label = item.label || item.option;
+    // 「未开启」的选项不算"不适用"，不该置灰 —— 置灰只表达"本模式下它无处可施"。
+    const offByUser = !item.value;
+    if (!item.applied && !offByUser) {
+      const chip = chipByOption[item.option];
+      if (chip) {
+        chip.classList.add('is-na');
+        chip.title = item.detail || '';
+      }
+      parts.push(`${label}：不适用`);
+    } else if (item.applied) {
+      parts.push(`${label}：生效`);
+    }
+  });
+  const hint = document.getElementById('effectiveHint');
+  if (!hint) return;
+  if (!parts.length) {
+    hint.hidden = true;
+    hint.textContent = '';
+    return;
+  }
+  hint.hidden = false;
+  hint.textContent = `本次生效情况 —— ${parts.join('；')}`;
 }
 
 /** 状态栏：API 密钥状态。 */
@@ -1774,23 +1846,92 @@ function nonConvergentStopReason(task) {
  * 这些停下原因（预算耗尽 / 空转 / 决策不可解析）下，任务是**没做完**的；此前前端什么
  * 都不显示 → 用户只看到顶栏「执行中」，既不知道原因也没有出口。
  */
+/** 渲染「执行已停下」卡：把后端停下原因翻成人话，并给出**可用的出口**。
+ *
+ * 这些停下原因下任务都**没做完**；此前前端什么都不显示 → 用户只看到顶栏「执行中」，
+ * 既不知道原因也没有出口。
+ *
+ * 出口分两类（用户反馈："20 轮预算用完了，他说就直接放弃任务了，我觉得应该让用户去决定
+ * 是否再跑 20 轮"）：
+ * - **预算用满**（步数 / token）→ 给「🔄 继续再跑一轮」+「放弃」，让用户拍板；
+ * - **空转 / 决策不可解析** → 只给「放弃」：模型是"没招了"，再多给预算只是烧钱，
+ *   所以如实说明并引导改需求，而不是给一个点了也没用的按钮。
+ */
+const BUDGET_STOP_REASONS = ['budget_steps', 'budget_tokens'];
+
+function isBudgetStop(task) {
+  const reason = (task && task.loop_state && task.loop_state.stopped_reason) || '';
+  return BUDGET_STOP_REASONS.includes(String(reason));
+}
+
+/** 预算进度人话（``12/20 步 · 8200/60000 tokens``），取不到就返回空串。 */
+function budgetProgressText(task) {
+  const budget = task && task.loop_state && task.loop_state.budget;
+  if (!budget) return '';
+  const parts = [];
+  if (typeof budget.steps_used === 'number' && typeof budget.max_steps === 'number') {
+    parts.push(`${budget.steps_used}/${budget.max_steps} 步`);
+  }
+  if (typeof budget.tokens_used === 'number' && typeof budget.max_tokens === 'number') {
+    parts.push(`${budget.tokens_used}/${budget.max_tokens} tokens`);
+  }
+  return parts.join(' · ');
+}
+
 function buildStopCard(task) {
   const reason = loopStopReason(task);
   const results = (task && task.execution_results) || [];
   const failed = results.filter((r) => r.status === 'failed').length;
+  const retryable = isBudgetStop(task);
+  const progress = budgetProgressText(task);
   const card = document.createElement('div');
   card.className = 'stop-card';
   card.dataset.taskId = (task && task.task_id) || currentTaskId || '';
+  const detail = retryable
+    ? `已经用掉 ${escapeHtml(progress || '本轮预算')}，循环先停下来等你决定 —— `
+      + `需求还没做完，但"预算用满"不等于"做不成"。可以再给它一轮预算继续做，或就此放弃。`
+    : `${escapeHtml(reason)}${failed ? `，其中 ${failed} 个步骤失败（细节见上方「过程」）` : ''}。`
+      + `需求尚未完成：可以把需求说得更具体后重新发送，或放弃这个任务。`;
   card.innerHTML = `
-    <div class="stop-title">⚠ 执行已停下</div>
-    <div class="stop-detail">${escapeHtml(reason)}${failed ? `，其中 ${failed} 个步骤失败（细节见上方「过程」）` : ''}。需求尚未完成：可以把需求说得更具体后重新发送，或放弃这个任务。</div>
+    <div class="stop-title">${retryable ? '⏸ 预算用完了，等你决定' : '⚠ 执行已停下'}</div>
+    <div class="stop-detail">${detail}</div>
     <div class="approval-actions">
+      ${retryable ? '<button class="btn btn-resume" type="button">🔄 继续再跑一轮</button>' : ''}
       <button class="btn btn-danger" type="button">✗ 放弃任务</button>
     </div>
   `;
+  const again = card.querySelector('.btn-resume');
+  if (again) again.onclick = () => handleContinueTask(card);
   card.querySelector('.btn-danger').onclick = () => handleAbort(card);
   return card;
 }
+
+/** 点「继续再跑一轮」：请后端上浮预算（默认 +20 步）并继续执行。 */
+async function handleContinueTask(card) {
+  const taskId = (card && card.dataset.taskId) || currentTaskId;
+  if (!taskId) return;
+  const button = card.querySelector('.btn-resume');
+  if (button) {
+    button.disabled = true;
+    button.textContent = '⟳ 继续中…';
+  }
+  markTaskRunning(taskId);
+  try {
+    const result = await api.continueTask(taskId);
+    syncTaskStatus(taskId, result.status);
+    // applyRunResult **只接任务对象**（它自己会从 task.task_id 取 id）——
+    // 传 (taskId, result) 会让它拿到一个字符串、`task.task_id` 变 undefined（实测踩到）。
+    applyRunResult(result);
+  } catch (err) {
+    // 失败要**如实**说，并且把按钮放回去（比如已达上限 / 不是预算停下）
+    appendMessage('agent', `❌ 继续执行失败：${err.message}`);
+    if (button) {
+      button.disabled = false;
+      button.textContent = '🔄 继续再跑一轮';
+    }
+  }
+}
+
 
 /** 渲染「待确认交付」卡：收敛后停在 ``verifying`` 的**唯一出口**。
  *
@@ -2105,6 +2246,9 @@ async function handleViewerSave() {
       ? `${formatSize(file.size)} · 已保存到 ${savedAbs}`
       : `${formatSize(file.size)} · 已保存`;
     setViewerDirty(false);
+    // 保存完**立刻刷新产物面板**：此前面板里的字节数 / 内容是旧的，必须手动 ↻ 才更新
+    // （实测 2026-10-11，用户报的就是这个"延迟"）。折叠状态按路径记，整树重建不会丢。
+    loadFileTree();
     // 报告**绝对路径**：这正是用户「不知道保存在哪」缺的那条信息。
     appendMessage('agent', savedAbs
       ? `已保存到：${savedAbs}（工作区内路径 ${file.path}）`
@@ -2315,15 +2459,23 @@ async function loadTaskSummaries() {
   }
 }
 
-/** 终止当前后端任务（切换/新建任务前调用，避免孤儿任务）。 */
-async function stopActiveTask() {
+/** 中断当前任务（状态机 EXECUTING → INTERRUPTED，**可恢复**）。
+ *
+ * ⚠️ 只由「⏸ 中断」按钮，以及"带着运行中的任务切走"的确认流程调用。
+ * **浏览 / 切换任务绝不调用它** —— 那是只读操作（见 `switchToTask`）。
+ *
+ * 此前这里叫 `stopActiveTask()` 且调的是 `/abort`（→ **FAILED**，不可逆），
+ * 于是"点一下任务列表回看"就把手上正在跑的任务废掉了（实测 2026-10-11）。
+ */
+async function interruptActiveTask() {
   const taskId = currentTaskId;
   if (!taskId) return;
   try {
-    await api.abortTask(taskId);
+    await api.interruptTask(taskId, 'leave_current');
+    currentTaskRunning = false;
   } catch (err) {
-    // 任务可能已终结（delivered/failed 等），终止失败不阻塞切换。
-    console.warn('终止旧任务失败，忽略：', err.message);
+    // 任务可能已终结（delivered/failed 等），中断失败不阻塞切换。
+    console.warn('中断旧任务失败，忽略：', err.message);
   }
 }
 
@@ -2339,12 +2491,17 @@ function clearChatUI() {
   refreshChatEmpty();
 }
 
-/** 切换回看某个任务：先终止当前后端任务 → 再清界面 → 恢复该任务会话与状态。 */
+/** 切换回看某个任务：**只读**（保存快照 → 清界面 → 恢复该任务会话与状态）。
+ *
+ * ⚠️ 这里**不再**终止旧任务（实测 2026-10-11）：点开另一个任务只是「回看」，
+ * 不该有破坏性副作用 —— 此前调 `/abort` 会把旧任务置为 **FAILED**，
+ * 用户看到的就是"点一下任务就被自动终止"。
+ * 也不会留孤儿任务：任务列表能看到它、状态如实显示，回到它时执行轮询会自动恢复。
+ */
 async function switchToTask(taskId) {
   if (!taskId || taskId === currentTaskId) return;
   saveSession();               // 先把当前任务会话快照进任务表
-  await stopActiveTask();      // 先终止旧任务（防孤儿任务）
-  clearChatUI();               // 再清界面
+  clearChatUI();               // 只清界面，不动后端任务
   currentTaskId = taskId;
   currentPendingApproval = null;
   currentStopReason = '';
@@ -2360,20 +2517,28 @@ async function switchToTask(taskId) {
   try {
     const task = await api.getTask(taskId);
     applyTaskToView(task);
+    // 回到一个**仍在后台执行**的任务 → 恢复轮询，继续边跑边渲染（否则等于看不见了）。
+    if (task.running) startTaskRunPoller(taskId);
   } catch (err) {
     appendMessage('agent', `❌ 无法打开任务：${err.message}`);
   }
   await loadTaskSummaries();
 }
 
-/** 「＋ 新任务」：先终止当前后端任务 → 再清界面（其它任务历史仍保留，可回看）。 */
+/** 「＋ 新任务」：**另开一个任务**（旧任务保留在列表里，**不被终止**）。
+ *
+ * 此前这里会先 `/abort` 掉当前任务（界面文案也写着"终止当前任务"）——
+ * 于是"想开个新任务"等于"把手上正在跑的任务废掉"（实测 2026-10-11）。
+ * 真要停旧任务请用「⏸ 中断」（可恢复）。
+ */
 async function startNewTask() {
   saveSession();
-  await stopActiveTask();   // 先终止后端任务
-  clearChatUI();            // 再清界面
+  clearChatUI();            // 只清界面，不动后端任务
   resetActiveView();
   currentTaskId = null;
   currentTaskTitle = '';
+  currentTaskRunning = false;
+  lastArtifactSignature = '';
   updateTaskStatus('received');
   updateTitlebar();
   setNavOpen(false);
@@ -2389,10 +2554,48 @@ async function startNewTask() {
  * 抽出来是为了让「重新生成」复用**完全相同**的建任务 / 规划 / 执行链路，
  * 而不是复制一份 —— 复制出来的那份迟早会跟这里的修正脱节。
  */
+/** 组装「上文」：上一个任务的 需求 / 结论 / 已产出文件，供新任务接续。
+ *
+ * 为什么需要（实测 2026-10-11）：每次发消息都会**新建任务**，而新任务的上下文只有这一句话 ——
+ * 于是「先做后端 → 再做前端」这类多步需求必然断链（用户报的"它没有记忆、前后端没法连上"）。
+ *
+ * 只取**客观事实**（需求原文 / 后端结论 / 已产出文件 / 上一轮状态），不编造意图；
+ * 上一个任务**还在跑**时返回空串（半成品不该当作"已完成的上文"）。
+ */
+async function buildContinuationContext(taskId) {
+  if (!taskId) return '';
+  let task = null;
+  try {
+    task = await api.getTask(taskId);
+  } catch (err) {
+    return '';
+  }
+  if (task.running) return '';
+  const lines = [];
+  const requirement = lastUserRequirement();
+  if (requirement) lines.push(`- 上一轮需求：${requirement}`);
+  else if (task.title) lines.push(`- 上一轮需求（标题）：${task.title}`);
+  if (task.conclusion) lines.push(`- 上一轮结论：${task.conclusion}`);
+  const artifacts = [];
+  for (const path of (task.loop_state && task.loop_state.artifacts) || []) artifacts.push(path);
+  for (const item of task.execution_results || []) {
+    for (const path of item.artifacts || []) artifacts.push(path);
+  }
+  const unique = Array.from(new Set(artifacts.filter(Boolean)));
+  if (unique.length) lines.push(`- 已产出文件：${unique.slice(0, 40).join('、')}`);
+  lines.push(`- 上一轮状态：${statusLabel(task.status)}`);
+  return lines.join('\n');
+}
+
 async function runRequirementAsTask(requirement, options) {
-  const useLLM = document.getElementById('llmToggle')?.checked || false;
+  // 「LLM 拆分」开关现在只管「是否直连模型」（见 handleSend），**不再**兼管规划是否用 LLM；
+  // 走到这里就是工作流模式，规划照旧用模型（保持原有行为，不削灵活性）。
+  const useLLM = true;
   const planOptions = options && options.planOptions ? options.planOptions : readPlanOptions();
-  const task = await api.createTask(requirement);
+  const task = await api.createTask(requirement, {
+    context: (options && options.contextNote) || '',
+    parentTaskId: (options && options.parentTaskId) || '',
+  });
   currentTaskId = task.task_id;
   currentTaskTitle = task.title || '';
   // 新任务：重置当前视图（其它任务历史仍保留）。
@@ -2405,13 +2608,93 @@ async function runRequirementAsTask(requirement, options) {
   updateTitlebar();
   updateTaskStatus(task.status);
   appendMessage('user', requirement);
+  // 「有没有记忆」不能是黑箱：以后端**实际**注入的字数为准（它才是真正的记忆来源）。
+  const ctxChars = (task && task.context_chars) || 0;
+  if (ctxChars) {
+    appendMessage('agent', `已带上本项目的历史上下文（${ctxChars} 字，来自工作区里的项目记忆）；`
+      + '要完全另起（不带历史），点左栏「＋ 新任务」。');
+  }
   // 触发分解（附带底部栏规划选项）并应用结果；0 步时渲染「暂无可用计划」卡片。
   const result = await api.planTask(task.task_id, useLLM, planOptions);
   await applyPlanResult(task.task_id, result);
 }
 
 /** 发送需求 → 创建任务 → 分解 → 默认直接执行（到点暂停则渲染提醒卡）。 */
+/** 「LLM 拆分」是否开启：开启 = 大模型与工作流**拆开**，前端只跟模型对话。 */
+function isLlmSplitOn() {
+  return document.getElementById('llmToggle')?.checked || false;
+}
+
+/** 记住「LLM 拆分」模式（**只写 sessionStorage** —— 项目约束：绝不落 localStorage）。 */
+function persistLlmSplit(on) {
+  try {
+    sessionStorage.setItem(LLM_SPLIT_KEY, on ? '1' : '0');
+  } catch (err) {
+    // 隐私模式 / 存储被禁用：模式不持久化，但功能照常
+  }
+}
+
+/** 恢复上次选的模式（刷新后仍是你选的那个）。 */
+function restoreLlmSplit() {
+  const el = document.getElementById('llmToggle');
+  if (!el) return;
+  try {
+    const saved = sessionStorage.getItem(LLM_SPLIT_KEY);
+    if (saved !== null) el.checked = saved === '1';
+  } catch (err) {
+    // 读不到就用 HTML 里的默认值（不勾 = 工作流模式）
+  }
+}
+
+/** **直连大模型**：只把消息发给模型、把回复显示出来。
+ *
+ * **不建任务、不规划、不执行、不审批、不落产物** —— 这就是「把大模型与工作流拆开」。
+ * 走的是独立端点 `/llm/chat`（不是 `/chat`：那条是"要不要干活"的分流）。
+ */
+async function handleDirectChat(requirement) {
+  if (isSending) return;
+  isSending = true;
+  const sendBtn = document.getElementById('sendBtn');
+  if (sendBtn) sendBtn.disabled = true;
+  const input = document.getElementById('msgInput');
+  showThinking('直连模型中…');
+  try {
+    // 先取历史（此时还没把本轮写进 transcript，避免同一句话重复发两遍）。
+    const history = recentChatHistory();
+    appendMessage('user', requirement);
+    const { model, temperature } = readPlanOptions();
+    const result = await api.directChat({
+      message: requirement,
+      messages: history,
+      model,
+      temperature,
+    });
+    appendMessage('agent', result.reply);
+    // 如实播报"这次是谁在回答、花了多久" —— 拆开之后不该是黑箱。
+    const seconds = ((result.duration_ms || 0) / 1000).toFixed(1);
+    appendProcessNote(`直连大模型：${result.model || '默认模型'} · ${seconds}s`
+      + '（未创建工作流任务）');
+  } catch (err) {
+    appendMessage('agent', `❌ 直连模型失败：${err.message}`);
+  } finally {
+    isSending = false;
+    hideThinking();
+    if (sendBtn) sendBtn.disabled = false;
+    if (input) input.focus();
+  }
+}
+
 async function handleSend() {
+  if (isLlmSplitOn()) {
+    // 「LLM 拆分」开启：大模型与工作流拆开 —— 只跟模型对话，绝不建任务。
+    const splitInput = document.getElementById('msgInput');
+    const splitRequirement = splitInput.value.trim();
+    if (!splitRequirement) return;
+    splitInput.value = '';
+    autoGrowInput();
+    await handleDirectChat(splitRequirement);
+    return;
+  }
   const input = document.getElementById('msgInput');
   const requirement = input.value.trim();
   if (!requirement) return;
@@ -2427,7 +2710,19 @@ async function handleSend() {
     // 1. 读取底部栏规划选项（模型 / 推理强度 / 高级 / 副结构自检 / 评审会 / LLM 开关）。
     const planOptions = readPlanOptions();
 
-    // 2. 先聊天：判断这句话是闲聊（直接回话）还是执行诉求（才建任务）。
+    // 2. **先判断该不该"继续改这个任务"**（卡 50）：
+    //    上一个任务已经跑完（验证中/暂停）时，用户这句话大概率是"把 X 改成 Y"。
+    //    以前它会被当成新需求**另建一个任务**，模型于是从零重做（甚至覆盖已做好的东西）——
+    //    用户的原话就是"做的不满意也没法改"。
+    //    要另起新任务：点左栏「＋ 新任务」或输入框旁的「另起新任务」。
+    if (continueModeFor() === 'instruct') {
+      input.value = '';
+      autoGrowInput();
+      await sendFollowUp(requirement);
+      return;
+    }
+
+    // 3. 先聊天：判断这句话是闲聊（直接回话）还是执行诉求（才建任务）。
     //    此前无条件建任务 → 「你好」也会弹一份执行计划，这是本步要消除的体验。
     const { model, temperature } = planOptions;
     const verdict = await api.chat(requirement, recentChatHistory(), { model, temperature });
@@ -2439,10 +2734,18 @@ async function handleSend() {
       return;
     }
 
-    // 3. 明确要干活 —— 建任务，进入原有规划 / 执行链路。
+    // 4. 明确要干活 —— 建任务，进入原有规划 / 执行链路。
     input.value = '';
     autoGrowInput();
-    await runRequirementAsTask(requirement, { planOptions });
+    // 「续接」：默认把上一个任务的上文带上（用户报的"没有记忆"就是缺这个）。
+    // 要**不带**上文另起一个，走左栏「＋ 新任务」（它会清掉 currentTaskId）。
+    const parentTaskId = (currentTaskId && !currentTaskRunning) ? currentTaskId : '';
+    const contextNote = await buildContinuationContext(parentTaskId);
+    await runRequirementAsTask(requirement, {
+      planOptions,
+      contextNote,
+      parentTaskId: contextNote ? parentTaskId : '',
+    });
   } catch (err) {
     // 失败时把需求还给用户；但若用户在等待期间已重新输入内容，则不覆盖其新输入（审计 P2）
     if (!input.value.trim()) {
@@ -2455,9 +2758,55 @@ async function handleSend() {
     isSending = false;
     hideThinking();
     if (sendBtn) sendBtn.disabled = false;
+    // 卡 50：一次性的"另起新任务"意图用完即复位（否则后面永远不接着改）。
+    forceNewTask = false;
+    refreshContinueHint();
     await loadTaskSummaries();
     // 规划/执行完成后触发交接判定（轮次 / token / 字符门控由前端累计上报）。
     checkHandover();
+  }
+}
+
+/** 当前输入框的语义：``instruct`` = 继续改这个任务；``new`` = 另起新任务（卡 50）。
+ *
+ * 判定口径（与后端 ``/instruct`` 允许的状态一致）：有一个**跑完/暂停中**的当前任务时，
+ * 默认"继续改这个任务"；正在执行、还没跑过、或用户点了「另起新任务」时走新建。
+ */
+function continueModeFor() {
+  if (forceNewTask) return 'new';
+  if (!currentTaskId || currentTaskRunning) return 'new';
+  return taskFollowUpEligible ? 'instruct' : 'new';
+}
+
+/** 刷新「继续改这个任务 / 另起新任务」提示（卡 50）。 */
+function refreshContinueHint() {
+  const row = document.getElementById('continueRow');
+  const hint = document.getElementById('continueHint');
+  const eligible = continueModeFor() === 'instruct';
+  if (row) row.hidden = !eligible;
+  if (!hint) return;
+  hint.textContent = eligible ? '发送＝继续改这个任务（在已有产物上改，不新建）' : '';
+}
+
+/** 点「另起新任务」：这一句话不接着改，走新建任务链路（卡 50 的出口）。 */
+function requestNewTaskInstead() {
+  forceNewTask = true;
+  refreshContinueHint();
+  appendMessage('agent', '好，下一句会**另起一个新任务**（不再接着改当前任务）。');
+}
+
+/** 把这句话作为**修改要求**追加到当前任务（卡 50），而不是新建任务。 */
+async function sendFollowUp(requirement) {
+  const taskId = currentTaskId;
+  appendMessage('user', requirement);
+  try {
+    const result = await api.instructTask(taskId, requirement);
+    syncTaskStatus(taskId, result.status);
+    // 同上：applyRunResult 只接任务对象（传 (taskId, result) 会让它拿到字符串）。
+    applyRunResult(result);
+    appendMessage('agent', '收到，在已有产物上改…');
+  } catch (err) {
+    appendMessage('agent', `❌ 追加修改失败：${err.message}`);
   }
 }
 
@@ -2544,6 +2893,10 @@ function recentChatHistory(limit = 8) {
 async function applyPlanResult(taskId, result) {
   // 仅当卡片/结果属于当前任务时才更新顶栏状态标签。
   syncTaskStatus(taskId, result.status);
+
+  // 卡 46b：按后端回传的「本次实际生效的选项」如实标注开关（不适用 → 置灰 + 说明原因）。
+  // 放在最前面：即使后面因为 0 步提前 return，标注也已经落地。
+  if (taskId === currentTaskId) applyEffectiveOptions(result.effective_options);
 
   // 评审会（若已开启）：先展示多角色收敛出的纪要。
   if (result.council) appendCouncilCard(result.council);
@@ -2678,7 +3031,8 @@ async function handleReplan(card) {
     // 直接重规划必然 409（非法状态转换）。先「改计划」退回 planning 再重新分解；
     // 顺带作废旧计划的放行记录（与 /reject 的语义一致）。
     if (card.dataset.canReject === '1') await api.rejectTask(taskId);
-    const useLLM = document.getElementById('llmToggle')?.checked || false;
+    // 同 runRequirementAsTask：工作流模式下规划恒定用模型。
+    const useLLM = true;
     const planOptions = readPlanOptions();
     const result = await api.planTask(taskId, useLLM, planOptions);
     clearCardActions(card);
@@ -2711,6 +3065,10 @@ function mergePlanStateFromTask(task) {
 
 /** 应用一次执行结果（/run、/resume、/approve 后共用）。 */
 function applyRunResult(task) {
+  currentTaskRunning = !!task.running;
+  // 任务结束（含到点暂停 / 非收敛停下）→ 产物面板立刻反映磁盘真实状态，
+  // 不然新产出的文件要手动 ↻ 才出现（实测 2026-10-11）。
+  loadFileTree();
   syncTaskStatus(task.task_id, task.status);
   mergePlanStateFromTask(task);
   renderPlanBlock(planState);
@@ -2723,8 +3081,25 @@ function applyRunResult(task) {
 }
 
 // 后台执行期间的轮询间隔（毫秒）：够快能看见逐步产出，又不至于把后端打爆。
+// 「LLM 拆分」模式的会话内持久键（只写 sessionStorage）。
+const LLM_SPLIT_KEY = 'ab.llmSplit';
+// 技能（能力组）开关的会话内持久键（只写 sessionStorage，与项目约束一致）。
+const SKILL_CAPS_KEY = 'ab.capabilities';
+// 后端 /capabilities 下发的能力组清单（**前端不写死任何一项**）。
+let capabilityGroups = [];
+// 后端对插件区下发的如实说明（当前恒为"后端未实现插件系统"）。
+let pluginsNote = '';
 const RUN_POLL_INTERVAL_MS = 1500;
 let taskRunPoller = null;
+// 当前任务是否**正在后台执行**：切项目时要据此确认（见 enterProjectWorkspace）。
+let currentTaskRunning = false;
+// 卡 50：当前任务是否**可以继续改**（已跑完 / 暂停中，且不是终态交付/放弃）。
+// 由 updateTaskStatus 按状态刷新；决定输入框是"继续改这个任务"还是"新建任务"。
+let taskFollowUpEligible = false;
+// 卡 50：用户显式要求「另起新任务」时置真（发一次就复位）。
+let forceNewTask = false;
+// 产物面板刷新用的签名：**产物集合变了才重新拉树**，避免轮询期间每 1.5s 打一次接口。
+let lastArtifactSignature = '';
 
 /** 后台执行期间用 ``loop_state.rounds`` 画**临时卡片**（只渲染，不写 transcript）。
  *
@@ -2799,10 +3174,18 @@ function startTaskRunPoller(taskId) {
     try {
       task = await api.getTask(taskId);
     } catch (err) {
+      currentTaskRunning = false;
       stopTaskRunPoller();
       return;
     }
     renderProgress(task);
+    currentTaskRunning = !!task.running;
+    // 逐步产出也看得见：产物集合一变就刷新面板（长任务不必等到结束）。
+    const sig = artifactSignature(task);
+    if (sig && sig !== lastArtifactSignature) {
+      lastArtifactSignature = sig;
+      loadFileTree();
+    }
     if (task.running) return;   // 后台还在跑 → 下一轮再看
     stopTaskRunPoller();
     // 终态：补齐自检 / 进度播报 / 结论，并刷新任务列表与交接提示。
@@ -2812,6 +3195,15 @@ function startTaskRunPoller(taskId) {
   };
   taskRunPoller = setInterval(tick, RUN_POLL_INTERVAL_MS);
   tick();   // 立刻对齐一次，别空等第一个间隔
+}
+
+/** 汇总本次任务声明过的产物路径，拼成刷新签名（顺序无关，只看集合）。 */
+function artifactSignature(task) {
+  const parts = ((task && task.loop_state && task.loop_state.artifacts) || []).slice();
+  for (const item of (task && task.execution_results) || []) {
+    for (const path of item.artifacts || []) parts.push(String(path));
+  }
+  return parts.slice().sort().join('|');
 }
 
 /** 渲染执行结果卡片（含代码块与「查看产物」入口）。 */
@@ -2947,6 +3339,7 @@ async function handleInterrupt() {
   }
   try {
     const task = await api.interruptTask(currentTaskId, 'user_stop');
+    currentTaskRunning = false;
     updateTaskStatus(task.status);
     renderActionSlot(task);
     appendMessage('agent', '任务已中断，可恢复继续执行或放弃任务。');
@@ -3107,6 +3500,12 @@ function readPlanOptions() {
   if (model) options.model = model;
   const temperature = slider ? Number(slider.value) : NaN;
   if (Number.isFinite(temperature)) options.temperature = temperature;
+  // 任务级能力开关（卡 45）：**只有全部启用时不下发**（后端 None = 全开，保持既有行为）；
+  // 少勾了任何一组就把当前集合显式下发 —— 后端据此收窄角色白名单与能力目录。
+  const caps = enabledCapabilities();
+  if (caps.length !== capabilityGroups.length || caps.length === 0) {
+    options.capabilities = caps;
+  }
   return options;
 }
 
@@ -3136,6 +3535,173 @@ function refreshSubArchChip() {
 }
 
 subArchToggleEl?.addEventListener('change', refreshSubArchChip);
+
+// 卡 50：「另起新任务」出口 —— 一句话不接着改，改走新建任务链路。
+document.getElementById('newTaskInstead')?.addEventListener('click', requestNewTaskInstead);
+
+// ── 技能 / 插件面板（卡 45）：清单来自后端，前端不写死 ─────────────
+//
+// 为什么这么写：左栏原来那三个开关**没有后端出处**，点了不生效（前端自己写着
+// "尚未接入后端，仅作展示"）。现在每一项都来自 `GET /capabilities`，而开关状态会随
+// `/plan` 下发（`capabilities`），后端据此把该组的工具从角色白名单里剔除、
+// 并让能力目录里不再出现该组的动作。
+
+/** 读取上次勾选的能力组（sessionStorage；没有记录 = 全部启用）。 */
+function restoreEnabledCapabilities() {
+  try {
+    const raw = sessionStorage.getItem(SKILL_CAPS_KEY);
+    if (raw === null) return null; // 从未设置过 → 全开
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : null;
+  } catch (err) {
+    return null; // 读坏/被禁用 → 退回全开（不因为存储问题改变能力）
+  }
+}
+
+/** 当前**已勾选**的能力组（按后端下发的顺序）。 */
+function enabledCapabilities() {
+  const saved = restoreEnabledCapabilities();
+  if (saved === null) return capabilityGroups.map((item) => item.group);
+  return capabilityGroups
+    .filter((item) => saved.includes(item.group))
+    .map((item) => item.group);
+}
+
+/** 持久化勾选状态（只写 sessionStorage）。 */
+function persistEnabledCapabilities(groups) {
+  try {
+    sessionStorage.setItem(SKILL_CAPS_KEY, JSON.stringify(groups));
+  } catch (err) {
+    // 隐私模式：不持久化，但本次会话内仍然生效
+  }
+}
+
+/** 刷新底部「当前生效选项」提示，让用户看得见能力开关真的改变了什么。 */
+function refreshSkillHint() {
+  const hint = document.getElementById('skillHint');
+  if (!hint) return;
+  if (!capabilityGroups.length) {
+    hint.textContent = '';
+    return;
+  }
+  const on = enabledCapabilities();
+  const off = capabilityGroups.filter((item) => !on.includes(item.group));
+  hint.textContent = off.length
+    ? `已关闭：${off.map((item) => item.label).join('、')} —— 该组工具不会进入本任务的角色白名单。`
+    : '全部能力已启用（新任务按这里的勾选生效）。';
+}
+
+/** 按后端清单渲染技能开关（**每一项都能追到 /capabilities**）。 */
+function renderCapabilities() {
+  const list = document.getElementById('skillList');
+  if (!list) return;
+  list.innerHTML = '';
+  if (!capabilityGroups.length) {
+    const empty = document.createElement('div');
+    empty.className = 'panel-hint';
+    empty.textContent = '后端未返回能力清单（未连接或接口失败）';
+    list.appendChild(empty);
+    refreshSkillHint();
+    return;
+  }
+  const saved = restoreEnabledCapabilities();
+  capabilityGroups.forEach((item) => {
+    const row = document.createElement('div');
+    row.className = 'skill-row';
+    // 用**索引**做 DOM 定位键：label 文案来自后端，塞进 CSS 选择器会踩引号/特殊字符。
+    row.dataset.capIndex = String(capabilityGroups.indexOf(item));
+
+    const label = document.createElement('span');
+    label.className = 'skill-label';
+    label.textContent = item.label;
+    label.title = `${item.note}（工具：${(item.tools || []).join(' / ')}）`;
+    if ((item.high_risk_tools || []).length) {
+      const badge = document.createElement('span');
+      badge.className = 'warn-badge';
+      badge.title = `高风险操作，需逐次放行：${item.high_risk_tools.join(' / ')}`;
+      badge.textContent = '⚠';
+      label.appendChild(badge);
+    }
+
+    const toggle = document.createElement('label');
+    toggle.className = 'toggle';
+    toggle.title = item.note || '';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.setAttribute('aria-label', item.label);
+    input.checked = saved === null ? true : saved.includes(item.group);
+    input.addEventListener('change', () => {
+      persistEnabledCapabilities(
+        // 用 DOM 现状重算，顺序仍按后端清单（避免"点一个就把别的弄丢"）。
+        capabilityGroups
+          .filter((entry, index) => {
+            const box = list.querySelector(`[data-cap-index="${index}"] input`);
+            return box ? box.checked : true;
+          })
+          .map((entry) => entry.group),
+      );
+      refreshSkillHint();
+    });
+    const track = document.createElement('span');
+    track.className = 'toggle-track';
+    toggle.appendChild(input);
+    toggle.appendChild(track);
+
+    row.appendChild(label);
+    row.appendChild(toggle);
+    list.appendChild(row);
+  });
+  refreshSkillHint();
+}
+
+/** 按后端清单渲染插件区（当前恒为空 + 如实说明 —— 不再画假条目）。 */
+function renderPlugins(plugins, note) {
+  const list = document.getElementById('pluginList');
+  if (!list) return;
+  list.innerHTML = '';
+  const hint = document.createElement('div');
+  hint.className = 'panel-hint';
+  if (!plugins || !plugins.length) {
+    hint.textContent = note || '后端尚未实现插件系统。';
+    list.appendChild(hint);
+    return;
+  }
+  plugins.forEach((item) => {
+    const row = document.createElement('div');
+    row.className = 'plugin-item';
+    row.textContent = `· ${item.name}`;
+    if (item.note) row.title = item.note;
+    list.appendChild(row);
+  });
+}
+
+/** 拉取真实能力清单（后端不可用时如实说，不画假开关）。 */
+async function loadCapabilities() {
+  const list = document.getElementById('skillList');
+  try {
+    const data = await api.getCapabilities();
+    capabilityGroups = Array.isArray(data.capability_groups) ? data.capability_groups : [];
+    pluginsNote = data.plugins_note || '';
+    renderCapabilities();
+    renderPlugins(data.plugins, pluginsNote);
+  } catch (err) {
+    capabilityGroups = [];
+    if (list) {
+      list.innerHTML = '';
+      const hint = document.createElement('div');
+      hint.className = 'panel-hint';
+      hint.textContent = `能力清单获取失败：${err.message}`;
+      list.appendChild(hint);
+    }
+    refreshSkillHint();
+  }
+}
+
+loadCapabilities();
+// 「LLM 拆分」：记住模式 + 启动时恢复（默认不勾 = 工作流模式）。
+const llmSplitToggleEl = document.getElementById('llmToggle');
+llmSplitToggleEl?.addEventListener('change', () => persistLlmSplit(!!llmSplitToggleEl.checked));
+restoreLlmSplit();
 
 // 模型 / 高级 / 执行自检 / 评审会：切换时刷新状态栏里的当前规划选项
 [modelSelect, advancedSelect, selfCheckToggleEl, councilToggleEl].forEach((el) => {
@@ -3652,11 +4218,25 @@ async function switchProject(projectId) {
   await enterProjectWorkspace();
 }
 
-/** 进入当前项目工作区：先终止旧任务 → 再清空对话 → 刷新项目列表与产物树。 */
+/** 进入当前项目工作区：必要时先确认并中断旧任务 → 再清空对话 → 刷新项目列表与产物树。
+ *
+ * 切项目会**换工作区**：正在后台执行的任务会继续在**新的工作区**里跑（可能把文件写到别处），
+ * 所以这里要拦住让用户拍板。但**绝不静默 abort**（那是不可逆的 FAILED）——
+ * 用可恢复的「中断」，并且默认聚焦「取消」。
+ */
 async function enterProjectWorkspace() {
+  if (currentTaskId && currentTaskRunning) {
+    const proceed = await openConfirmDialog({
+      title: '任务还在执行',
+      message: '当前任务仍在后台执行。切换项目会让它继续在**新的工作区**里运行，'
+        + '可能把文件写到别的地方。\n\n要先中断它吗？（中断可恢复，任务不会被丢弃）',
+      confirmText: '中断并切换',
+    });
+    if (!proceed) return;
+    await interruptActiveTask();
+  }
   saveSession();
-  await stopActiveTask();      // 先终止后端任务（防孤儿任务）
-  clearChatUI();               // 再清空界面
+  clearChatUI();               // 只清界面
   setNavOpen(false); // 窄屏：切换后收起抽屉
   setProjectMenuOpen(false);
   clearSession();

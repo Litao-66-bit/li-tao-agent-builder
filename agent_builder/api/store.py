@@ -60,6 +60,9 @@ class TaskEntry:
             前端据此判断「还要不要继续轮询」；同步执行路径下恒为 False。
         plan_text: **可读的执行计划文本**（agentic 下也产出，3~6 条 + 一行「验证：」）。
             ``mode=workflow`` 时它为空 —— 那时前端渲染的是 DAG 计划块。
+        context_note: **上文**（上一任务的需求 / 结论 / 产出）—— 只进提示词，
+            让「先做后端 → 再做前端」这类多步需求接得上；不改变任务语义。
+        parent_task_id: 上一个任务的 ID（续接归因）。
     """
 
     conductor: Conductor
@@ -84,6 +87,25 @@ class TaskEntry:
     pending_scaffold: dict[str, str] | None = None
     running: bool = False
     plan_text: str = ""
+    context_note: str = ""
+    parent_task_id: str | None = None
+    follow_ups: list[str] = field(default_factory=list)
+    """**用户追加的修改要求**（卡 50）：任务跑完之后，用户对已有产物不满意、
+    又在**同一个任务**上继续说的话（"把 X 改成 Y"）。
+
+    为什么要记在任务上：这是"不满意就改"闭环的输入 ——
+    ① 只进提示词（与原始需求**分开标注**，模型才知道"这是要我改，不是重做"）；
+    ② 供回看（用户能看到自己追加过什么）。
+    以前没有这条通路：用户想改只能在对话框里再发一句，而前端那是**新建任务** ——
+    模型于是从零开始，把工作区里已经做好的东西重做一遍。
+    """
+
+    budget_extensions: int = 0
+    """用户点过几次「继续再跑一轮」（步数预算上浮）。
+
+    记下来是为了两件事：① 回看时能看出"这个任务续过几轮"；② 审计/成本归因
+    （续跑是用户显式追加的支出，不该混进"模型自己烧的"里）。
+    预算上限本身存在 ``options["max_steps"]``。"""
 
 
 class InMemoryTaskStore:

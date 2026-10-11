@@ -43,6 +43,16 @@ from agent_builder.narrate import action_title, describe_step, summarize_result
 # 排错」这条主链路要自己走完。实测 12 步会在「已建包 + 已写实现 + 已写测试 +
 # 跑挂两次 + 正在按报错对齐接口」时被硬切（差一步收尾），故放宽到 20。
 MAX_LOOP_STEPS = 20
+# 用户点「继续再跑 N 轮」时每次追加的步数（与默认档位同尺度，便于心算）。
+#
+# 为什么要有"续跑"：预算是**硬顶**，模型跑满 20 步就停（stopped_reason=budget_steps）。
+# 此前界面只给「放弃任务」一个出口 —— 跑满预算 = 直接判死，用户没有别的选择。
+# 但"跑了 20 步还没收敛"不等于"这事做不成"：实测常见是差几步收尾。所以改成
+# **停下来问用户**：继续再来一轮（预算上浮），还是就此放弃。
+BUDGET_STEP_INCREMENT = 20
+# 续跑上限：20 步/轮 × 10 轮 = 200 步。防止"点着玩"把成本顶上天；
+# 到顶后仍可中断 / 放弃，只是不能再加（错误信息里会说明）。
+MAX_BUDGET_STEPS_LIMIT = 200
 # 60k tokens：交接提示门控阈值 12000 tokens 的 5 倍，作为"该收手"的硬顶。
 MAX_LOOP_TOKENS = 60_000
 # 连续 2 轮"没有进展" → 判空转。「有进展」= 成功**且**不是紧接着重复同一个动作
@@ -73,7 +83,11 @@ STEP_ID_PREFIX = "loop"
 
 @dataclass(slots=True)
 class LoopBudget:
-    """循环预算与已用量（调用方可跨 ``/resume`` 保留同一个实例）。"""
+    """循环预算与已用量（调用方可跨 ``/resume`` 保留同一个实例）。
+
+    ``max_steps`` 是**用户可上调的硬顶**（见 ``BUDGET_STEP_INCREMENT``）：
+    跑满之后循环停下来问用户"要不要再来一轮"，而不是直接判死。
+    """
 
     max_steps: int = MAX_LOOP_STEPS
     max_tokens: int = MAX_LOOP_TOKENS
@@ -588,6 +602,8 @@ def to_execution_results(outcome: LoopOutcome) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "BUDGET_STEP_INCREMENT",
+    "MAX_BUDGET_STEPS_LIMIT",
     "MAX_LOOP_STEPS",
     "MAX_LOOP_TOKENS",
     "MAX_REPEAT_FAILURES",

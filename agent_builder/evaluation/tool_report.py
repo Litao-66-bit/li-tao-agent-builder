@@ -36,15 +36,23 @@ from pathlib import Path
 from typing import Any
 
 from agent_builder.tools import registry
-from agent_builder.tools.permissions import DEFAULT_ROLE_PERMS
+from agent_builder.tools.permissions import (
+    APPROVAL_GATED_WRITE_TOOLS,
+    DEFAULT_ROLE_PERMS,
+    WORKSPACE_SCOPED_WRITE_TOOLS,
+)
 from agent_builder.tools.spec import VALID_COST_BANDS, VALID_RISK_LEVELS, ToolSpec
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _TESTS_DIR = _PROJECT_ROOT / "tests"
 _DOCS_TOOLS = _PROJECT_ROOT / "docs" / "tools.md"
 
-# 写/提交/回滚类：必须至少 medium，且必须进审批门（high_risk_tools）。
-MUTATING_TOOLS = frozenset({"file_write", "git_commit", "rollback"})
+# 写/提交/回滚类：必须至少 medium（不得为 low）。
+#
+# ⚠️ 「必须进审批门」只适用于 ``APPROVAL_GATED_WRITE_TOOLS``（删除 / 提交 / 回滚）——
+# 见 _score_risk。``file_write`` / ``file_edit`` 自卡 44 起**刻意不进**审批门：
+# 工作区内写文件是本职产出，边界由门卫路径沙箱硬拒绝，不需要逐次放行。
+MUTATING_TOOLS = frozenset({"file_write", "file_edit", "git_commit", "rollback", "file_delete"})
 # 执行类：会跑外部命令/代码，不应标为 low。
 EXEC_TOOLS = frozenset({"sandbox_run", "test_run"})
 
@@ -224,14 +232,23 @@ def _score_risk(spec: ToolSpec, gated: set[str]) -> tuple[Dimension, list[str]]:
         if spec.risk_level == "low":
             score -= 2
             flags.append("风险等级错标：写/提交/回滚类工具被标为 low")
-        if spec.name not in gated:
+        if spec.name in APPROVAL_GATED_WRITE_TOOLS and spec.name not in gated:
             score -= 2
             flags.append("审批门缺失：写/提交/回滚类工具未列入任何角色的 high_risk_tools")
+        if spec.name in WORKSPACE_SCOPED_WRITE_TOOLS and spec.name in gated:
+            # 卡 44：工作区内的写/改刻意不进审批门 —— 进了就等于让用户每写一个文件点一次放行。
+            score -= 2
+            flags.append(
+                "审批门过宽：工作区边界类写工具列入 high_risk_tools（会让产出文件每次都停下来等放行）"
+            )
     if spec.name in EXEC_TOOLS and spec.risk_level == "low":
         score -= 1
         flags.append("风险等级偏低：执行类工具被标为 low（同类 sandbox_run 为 medium）")
-    gait = "已挂" if spec.name in gated else "不需要"
-    note = "; ".join(flags) if flags else f"risk={spec.risk_level}; 审批门={gait}"
+    if spec.name in WORKSPACE_SCOPED_WRITE_TOOLS:
+        gate = "按工作区边界（沙箱硬拒越界）"
+    else:
+        gate = "已挂" if spec.name in gated else "不需要"
+    note = "; ".join(flags) if flags else f"risk={spec.risk_level}; 审批门={gate}"
     return Dimension(name="风险分级正确", score=max(0, score), max_score=5, note=note), flags
 
 

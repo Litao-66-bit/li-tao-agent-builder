@@ -17,7 +17,9 @@ from pathlib import Path
 import pytest
 
 from agent_builder.evaluation.scorecards import (
+    APPROVAL_GATED_WRITE_TOOLS,
     LAYER_VIOLATIONS,
+    WORKSPACE_SCOPED_WRITE_TOOLS,
     WRITE_TOOLS,
     _granted_tools,
     _high_risk_tools,
@@ -132,8 +134,33 @@ class TestLeastPrivilege:
 
     @pytest.mark.parametrize("role", sorted(DEFAULT_ROLE_PERMS))
     def test_写类工具必须挂审批门(self, role: str) -> None:
-        ungated = sorted(set(_granted_tools(role)) & WRITE_TOOLS - set(_high_risk_tools(role)))
+        """不可逆 / 跨版本边界的写类必须挂审批门；工作区边界类**不得**挂（卡 44）。
+
+        这两条是同一个安全口径的两面：删除 / 提交 / 回滚要用户拍板；工作区内的写/改
+        由路径沙箱兜底（越界 E_PERMISSION），不该让用户每写一个文件点一次放行。
+        """
+        granted = set(_granted_tools(role))
+        gated = set(_high_risk_tools(role))
+        ungated = sorted(granted & APPROVAL_GATED_WRITE_TOOLS - gated)
         assert not ungated, f"{role} 实授写类工具 {ungated} 但未列入 high_risk_tools"
+        over_gated = sorted(granted & WORKSPACE_SCOPED_WRITE_TOOLS & gated)
+        assert not over_gated, (
+            f"{role} 把工作区边界类写工具 {over_gated} 挂进 high_risk_tools —— "
+            "产出文件会每次都停下来等放行"
+        )
+
+    def test_写类清单与审批口径同步(self) -> None:
+        """``WRITE_TOOLS`` 必须正好覆盖「审批类 + 工作区边界类」，且两类互不重叠。
+
+        这条是口径漂移的警报器：以后新增写类工具时，必须显式归入两类之一
+        （``UNCLASSIFIED_WRITE_TOOLS`` 必须为空），否则它会被悄悄漏掉审批或错挂审批。
+        """
+        from agent_builder.tools.permissions import UNCLASSIFIED_WRITE_TOOLS
+
+        expected = set(APPROVAL_GATED_WRITE_TOOLS) | set(WORKSPACE_SCOPED_WRITE_TOOLS)
+        assert set(WRITE_TOOLS) == expected
+        assert not UNCLASSIFIED_WRITE_TOOLS, f"未归类的写类工具: {sorted(UNCLASSIFIED_WRITE_TOOLS)}"
+        assert not (set(APPROVAL_GATED_WRITE_TOOLS) & set(WORKSPACE_SCOPED_WRITE_TOOLS))
 
     @pytest.mark.parametrize("role", sorted(DEFAULT_ROLE_PERMS))
     def test_角色不悬空(self, role: str) -> None:

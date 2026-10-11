@@ -97,7 +97,15 @@ def list_dir(path: str) -> str:
 
     lines: list[str] = []
     for e in dirs:
-        lines.append(f"[DIR]  {prefix}{e.name}/")
+        # 目录带上**条目数**（卡 48 实测）：只给 ``[DIR] pkg/`` 时模型看不出里面有多大，
+        # 于是要么盲目下钻、要么直接跳过 —— 给个数字就能自己判断"值不值得进去看"。
+        # 数不出来（权限/竞态）就不显示，不编造。
+        try:
+            count = sum(1 for _ in e.iterdir())
+            suffix = f"  ({count} 项)"
+        except OSError:
+            suffix = ""
+        lines.append(f"[DIR]  {prefix}{e.name}/{suffix}")
     for e in files:
         try:
             size = e.stat().st_size
@@ -107,7 +115,8 @@ def list_dir(path: str) -> str:
 
     if truncated:
         shown = len(dirs) + len(files)
-        lines.append(f"…[已截断，共 {total} 条目，仅显示前 {shown} 条]")
+        # 截断信息放在**最前面**（卡 48/49 实测）：观察窗口只保头部，写在末尾等于没写。
+        lines.insert(0, f"…[共 {total} 条目，仅显示前 {shown} 条]")
 
     if not lines:
         return EMPTY_DIR_MARKER

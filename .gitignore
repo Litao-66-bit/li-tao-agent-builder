@@ -49,3 +49,16 @@ outputs/
 # —— 都不是项目源码，推送时不该带上（ruff 的 exclude 里也排除了这两处）
 .deps/
 _sample_backup/
+
+# ── 本机运行时 / 实测产物（含本机绝对路径，绝不入库；ruff check . 也才不会被它们拖红）──
+# DSH 沙箱 ACL 审计报告（插件生成，含本机绝对路径）
+.dsh-acl-reports/
+# 旧的沙箱配方留下的临时测试根目录（会污染 ruff check . 与 pytest 收集）
+pytest-root/
+# 落错位置的运行时数据：项目注册表副本 / 一次任务的工作区 / agent 的实测小产物
+paper-agent-registry/
+agent-workbench/
+paper-agent-demo/
+# 上面那条实测产物的直接输出文件
+/result.txt
+

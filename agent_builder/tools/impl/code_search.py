@@ -104,6 +104,9 @@ def _python_search(root: Path, pattern: str, max_results: int, base: Path) -> st
             break
     if truncated:
         lines.append(f"…[已截断，仅显示前 {max_results} 条匹配]")
+    header = _count_header(len(lines))
+    if header:
+        lines.insert(0, header)
     return "\n".join(lines)
 
 
@@ -204,7 +207,22 @@ def search_code(path: str, pattern: str, max_results: int = MAX_RESULTS) -> str:
 
     if truncated:
         lines.append(f"…[已截断，仅显示前 {max_results} 条匹配]")
+    header = _count_header(len(lines))
+    if header:
+        lines.insert(0, header)
     return "\n".join(lines)
+
+
+def _count_header(match_count: int) -> str:
+    """命中条数放**第一行**（卡 48/49 实测）。
+
+    为什么必须放头部：观察窗口只保**开头** 2000 字（失败时保尾），而 200 条匹配的输出
+    有 1.2 万字 —— 截断提示写在末尾会**跟着尾巴一起被丢掉**，模型看到的是一堆没有总量、
+    也没有"被截断过"的匹配行，于是以为"就这么多"。放在第一行就一定进得了模型的眼睛。
+    """
+    if match_count <= 0:
+        return ""
+    return f"命中 {match_count} 条（下方每行 file:line:content；如需更多请缩小 pattern）"
 
 
 spec = ToolSpec(

@@ -1,5 +1,71 @@
 # 项目交接提示词（Agent Builder）
 
+> **2026-10-11 预算用满不再判死 + 后端不再被"客户端断开"带崩**：
+> ① `POST /tasks/{id}/continue`：步数预算跑满后**停下来问用户**要不要再来一轮（默认 +20 步，
+> 上限 200），而不是只给「放弃」；`/plan` 也可用 `max_steps` 一次给足。
+> ② `app.py` startup 装**连接类异常守卫**（只吞 `ConnectionResetError` / `ConnectionAbortedError` /
+> `BrokenPipeError`，其余照常上报）—— 用户切任务/刷新不再把 uvicorn 进程带走。
+> ⚠️ **"关了前端后端还活着"是刻意的**（任务不会因刷新丢失），**不做**"没人连就自动退出"；
+> 后端进程启停由用户说了算（用户已明确否掉自动退出方向）。
+> **当前基线：`compileall` 干净、`ruff` 干净、`node --check` 通过、
+> `pytest` 2521 passed / 11 skipped / 0 failed。**
+
+> ⚠️ **改 Python 后的固定校验顺序**（本轮踩到）：`ruff` **抓不住**中文文案里的 ASCII 引号
+> （`description="…「」…"` 里混了 `"` → 字符串提前结束 → 模块语法错 → 后端起不来，
+> 而 ruff 报 All checks passed）。所以一律先 `python -m compileall -q agent_builder tests`
+> 再 `python -c "import agent_builder.api.app"`，最后才是 ruff。
+> **中文文案里的引号只用 `「」`。**
+
+> **2026-10-11 卡 48+49 已完成（先取证再针对性修）**：实测三条链路发现三个真缺陷并修掉 ——
+> ① `file_edit` 收到"带行号抄写"必然失败（现在做**严格校验**的行号剥除：每行带号、号码逐行 +1、
+> 且与文件实际行号对得上，命中后同步剥 `new_string`）；② 失败信息给出**最接近的一行 + 相似度**；
+> ③ `code_search` 的命中条数、`file_list` 的目录条目数与截断提示**全部移到第一行**
+> （观察窗口只保头部，写在末尾会被一起裁掉）。
+> 新增 `tests/test_tools_usability_fixes.py`（13）+ `tests/test_observation_fidelity.py`（14）。
+> **当前基线：`ruff` 干净、`pytest` 2484 passed / 11 skipped、`node --check` 通过。**
+
+> **2026-10-11 卡 50 已完成（"不满意就改"闭环）**：新增 `POST /tasks/{id}/instruct` ——
+> 在**同一个任务**上追加修改要求，不新建任务；追加要求记进 `TaskEntry.follow_ups`
+> 并**与原始需求分开**进提示词（明确"在已有产物上改、不要从零重做"）。
+> 状态口径只收 `verifying` / `interrupted`（有既有转换回 EXECUTING）；终态如实 409。
+> 实测修掉两个真缺陷：追加要求会消耗系统 `retry_count`（第 3 次追加直接 abort）、
+> 步数预算沿用上一轮导致追加指令一次都不执行。
+> 前端：任务跑完后输入框默认「继续改这个任务」，并给原生按钮「另起新任务」。
+> **当前基线：`ruff` 干净、`pytest` 2457 passed / 11 skipped、`node --check` 通过。**
+
+> **2026-10-11 卡 46b 已完成（底部开关如实标注，不动模型控制权）**：
+> ① `self_check` 补进 **agentic** 收尾路径（此前只在固定工作流算 → 默认模式下 100% 空转）；
+> ② `/plan` 新增 `effective_options`（每项 applied + 人话原因），agentic 下
+> `advanced` / `use_llm` **如实标注"本模式不适用"**，`workflow` 下如实算生效；
+> ③ 前端不适用就置灰（**只降视觉权重、不 disabled**）+ `#effectiveHint` 显示本次生效情况。
+> `deciders.py` / `agent_loop.py` **零改动**（源码断言钉住）。
+> **当前基线：`ruff` 干净、`pytest` 2437 passed / 11 skipped、`node --check` 通过。**
+
+> **2026-10-11 卡 47 已完成（后端）：密钥不再因重启静默失效**：新增
+> `agent_builder/api/secret_store.py`（原子写、0600、日志不记内容），
+> startup 按 **环境变量 → 落盘文件 → 不加载** 装载，`GET /settings/api-key` 回 `source`
+> （runtime/env/file/none）与 `persisted`，新增 `POST /settings/api-key/persist` 显式开关。
+> ⚠️ **落盘默认关闭**：`secrets.py` 的"只驻内存、不落盘"是已验收的安全约束（有对抗性用例守着），
+> 所以只有用户显式打开才写文件。前端「记住密钥」小开关尚未做。
+> **当前基线：`ruff` 干净、`pytest` 2417 passed / 11 skipped、`node --check` 通过。**
+
+> **2026-10-11 卡 45 已完成（技能/插件栏接后端 + 能力开关真生效）**：新增 `GET /capabilities`
+> （能力组 → 真实工具集合，插件恒空 + 如实说明）；`PlanRequest.capabilities` 让开关**真生效**——
+> 执行时先把该组之外的工具从角色白名单剔除（`permissions.filter_role_perms`），
+> 规划/执行的**能力目录**里也不再出现（`build_catalog(..., capabilities=)`），
+> 且角色动作被滤空时整个角色不进目录。前端左栏改为**动态渲染**，三条硬编码开关与三个假插件条目已删除。
+> **当前基线：`ruff` 干净、`pytest` 2399 passed / 11 skipped、`node --check` 通过。**
+> 取证见根目录 `bug-cards-2026-10-11-backend2.md` 第六节。
+
+> **2026-10-11 卡 44 已完成（写文件不再逐次审批）**：`file_write` / `file_edit` 从
+> `high_risk_tools` 移除（**仍是 `allowed_tools`**），审批门只拦 `file_delete` / `git_commit` /
+> `rollback` 与**越界写**（越界写由沙箱硬拒，不靠放行）；放行按**工作区**落盘记忆
+> （`<工作区>/.agent-memory/approved_tools.json`），新任务 / 重启后不再重复问。
+> 真实后端实测：agentic 任务写 `hello.py` 并运行 → `pending_approval=null`、`status=verifying`；
+> 越界写 → `E_PERMISSION 超出沙箱白名单`；两工作区反证授权不串味。
+> **当前基线：`ruff` 干净、`pytest` 2374 passed / 11 skipped、`node --check` 通过。**
+> 详细取证与验收见根目录 `bug-cards-2026-10-11-backend2.md` 第五节。
+
 > **2026-10-11 完成（卡 19–34，共 16 张；除卡 21 外全部已修并实测）**：
 > ① agentic 也产出**可读执行计划**并在界面默认展开（**不再是黑箱**：实测执行前就有 509 字计划）；
 > ② `/run`、`/resume` 改为**非阻塞执行 + 前端轮询**，长任务**不再整屏冻结**
@@ -494,12 +560,13 @@ agentic 也产出**可读执行计划**并默认展开（不再黑箱）；/run 
 ## 基础运行环境
 
 - **操作系统**：Windows + PowerShell
-- **工作副本（项目根）**：`C:\agent\li-tao-agent-builder`（**2026-10-09 晚起**）
-  - 旧副本 `c:\Users\李陶\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\work-mode-projects\6abcee34807a00aa83da2398`
-    只当**备份**，**不要再改**。
-  - ⚠️ 它自己也有一份 `.git` 与 `frontend/`，历史上服务就是从那里起的 —— **起服务前先确认是从工作副本起的**，
+- **工作副本（项目根）**：由你本地决定（本文历史里写作 `C:\agent\li-tao-agent-builder`；
+  **路径随机器而异，脚本/测试一律不要写死它**）。
+  - 另有一个旧 TRAE 副本目录（位于用户 `AppData\Roaming\TRAE SOLO CN\...\work-mode-projects\<id>`）
+    只当**备份**，**不要再改**。具体绝对路径见你本机环境，这里不写死。
+  - ⚠️ 旧副本自己也有一份 `.git` 与 `frontend/`，历史上服务就是从那里起的 —— **起服务前先确认是从工作副本起的**，
     否则前端会加载旧 `app.js`（改动"看不到"）、后端 `/projects` 回的 `workspace_dir` 也指向旧目录。
-  - 依赖（`.deps/`）、产物（`outputs/`）、临时（`.dsh-scratch/`）都还在旧副本里有一份，别混淆。
+  - 依赖（`.deps/`）、产物（`outputs/`）、临时（`.dsh-scratch/`）在旧副本里可能也有一份，别混淆。
 - **Python**：`"$env:USERPROFILE\AppData\Local\Programs\Python\Python314\python.exe"`（3.14），ruff 0.16.9
 - **依赖装法**：沙箱禁止写解释器 `site-packages` 的 `Scripts\*.exe`，故用 `pip install --target .deps` + 启动时 `PYTHONPATH=.deps`；`pyproject.toml` 的 ruff 已 `exclude = [".deps", "_sample_backup"]`（后者是实测产物草稿目录，非项目源码）
 - **后端**：FastAPI + uvicorn，端口 **8000**；CORS 白名单**仅** `http://127.0.0.1:8080`（换端口会被 CORS 拦，本会话验证时踩过）
@@ -570,7 +637,16 @@ node --check frontend/js/app.js
 | `POST /tasks/{id}/council` | 评审会 |
 | `/workspace/files`、`/workspace/file`、`/settings/api-key*`、`/projects*` | 产物树 / 文件读写 / 密钥 / 项目工作区 |
 
-**高风险审批门（方案 A，已接线）**：`file_write` / `file_delete` / `git_commit` / `rollback` 属高风险，一律 `Approval(required=True)`，只有被显式放行才带 `granted_by` 通过门卫；未放行**不再判失败**，而是被 `/run` 拦成「到点暂停」。
+**高风险审批门（方案 A，已接线）**：`file_delete` / `git_commit` / `rollback` 属高风险，
+一律 `Approval(required=True)`，只有被显式放行才带 `granted_by` 通过门卫；未放行**不再判失败**，
+而是被 `/run` 拦成「到点暂停」。
+
+> **卡 44 起的口径（改这一层之前先读）**：`file_write` / `file_edit` **不是**审批项 ——
+> 工作区内写/改是本职产出，边界由**路径沙箱**兜底（越界一律 `E_PERMISSION`，且沙箱校验
+> **排在审批门之前**）。判定真源是 `tools/gatekeeper.py: inside_workspace()`，权限侧的真源是
+> `tools/permissions.py` 的三个常量（`WRITE_TOOLS` / `WORKSPACE_SCOPED_WRITE_TOOLS` /
+> `APPROVAL_GATED_WRITE_TOOLS`）。放行按工作区持久化在
+> `agent_builder/api/approval_store.py`；`/reject` 会连工作区级授权一起撤销。
 
 ### 前端（`frontend/`，本会话已重做 IA）
 

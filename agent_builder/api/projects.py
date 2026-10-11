@@ -62,9 +62,22 @@ def _now() -> str:
 def default_workspace_dir() -> Path:
     """默认工作区目录。
 
-    优先 gatekeeper.WORKSPACE_DIR；该路径不存在时（如 Windows 开发环境）
-    回退到项目根目录。
+    优先级：
+    1. ``AGENT_BUILDER_DEFAULT_WORKSPACE``（存在且是目录时）—— 部署时把默认工作区指到
+       **仓库之外**的地方，避免"默认工作区 = 产品源码根"这个隐患；测试也用它对隔离；
+    2. ``gatekeeper.WORKSPACE_DIR``；
+    3. 回退到项目根目录（Windows 开发环境的现实情况）。
+
+    ⚠️ 第 3 条意味着"默认工作区"可能正是**产品自己的源码根**：`current_workspace_dir()`
+    在项目无效时也会回退到这里，于是「打开一个死项目」会变成「读写产品源码」
+    （见 2026-10-10 修过的那类坑）。生产部署请显式设置第 1 条。
     """
+    override = os.environ.get("AGENT_BUILDER_DEFAULT_WORKSPACE")
+    if override:
+        candidate = Path(override)
+        if candidate.is_dir():
+            return candidate.resolve()
+
     from agent_builder.tools.gatekeeper import WORKSPACE_DIR
 
     if WORKSPACE_DIR.exists():
@@ -315,6 +328,27 @@ class ProjectStore:
                 raise KeyError(project_id)
             project.last_opened_at = _now()
             self._current_id = project_id
+            self._save()
+            return project
+
+    def remove(self, project_id: str) -> Project:
+        """从注册表里移除一个项目（**只删登记，不动磁盘**）。
+
+        Raises:
+            KeyError: 项目不存在（路由层转 404）。
+            ValueError: 目标是**当前工作区**或**内置默认工作区**（路由层转 400）。
+
+        为什么不能删这两个（实测 2026-10-11）：``current()`` 在 ``_current_id`` 为空时
+        会回退到内置 default 项目，而它的目录是**产品源码根** —— 静默把工作区换成产品仓库
+        正是 2026-10-10 修过的那类坑（见 ``current_workspace_dir`` 的注释）。
+        """
+        with self._lock:
+            project = self._projects.get(project_id)
+            if project is None:
+                raise KeyError(project_id)
+            if project_id == self._current_id or project_id == self.DEFAULT_ID:
+                raise ValueError("不能移除当前工作区或内置默认工作区；请先切换到别的项目")
+            del self._projects[project_id]
             self._save()
             return project
 

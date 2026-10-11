@@ -41,6 +41,19 @@ class _FakeLLM:
         return self.decisions.pop(0)
 
 
+def _file_write(path: str) -> dict[str, Any]:
+    """写盘一步（**不需放行**，卡 44）：工作区内的 file_write 是本职产出。"""
+    return {
+        "thought": "把结论落盘",
+        "next": {
+            "kind": "agent",
+            "role": "code_worker",
+            "action": "file_write",
+            "inputs": {"path": path, "content": "hello"},
+        },
+    }
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     """隔离客户端：项目注册表落临时文件，工作区切到 tmp_path。"""
@@ -97,15 +110,15 @@ def _fail_read() -> dict[str, Any]:
     }
 
 
-def _file_write(path: str) -> dict[str, Any]:
-    """高风险一步（需放行）：file_write 属 code_worker 的高风险工具。"""
+def _file_delete(path: str) -> dict[str, Any]:
+    """需放行的一步：``file_delete`` 是不可逆动作，始终属高风险。"""
     return {
-        "thought": "把结论落盘",
+        "thought": "删掉这个文件",
         "next": {
             "kind": "agent",
-            "role": "code_worker",
-            "action": "file_write",
-            "inputs": {"path": path, "content": "hello"},
+            "role": "operator",
+            "action": "file_delete",
+            "inputs": {"path": path},
         },
     }
 
@@ -154,51 +167,94 @@ class TestAgenticRun:
 
 
 class TestAgenticApprovalGate:
-    def test_高风险动作到点暂停且未写盘(
+    """审批门（卡 44 口径）：删除类到点暂停；**工作区内的写/改不再暂停**。"""
+
+    def test_不可逆动作到点暂停且未执行(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
-        target = tmp_path / "out.txt"
+        target = tmp_path / "victim.txt"
+        target.write_text("keep me", encoding="utf-8")
+        fake = _FakeLLM([_file_delete(str(target)), {"kind": "final"}])
+        monkeypatch.setattr(routes_module, "get_llm_client", lambda **k: fake)
+        tid = _plan_agentic(client, "删文件")
+
+        body = client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS).json()
+
+        assert body["status"] == "interrupted"
+        assert body["pending_approval"]["tools"] == ["file_delete"]
+        assert body["pending_approval"]["steps"][0]["step_id"] == "loop-001"
+        assert body["execution_results"][0]["status"] == "pending_approval"
+        assert body["loop_state"]["pending_decision"]["action"] == "file_delete"
+        assert target.exists(), "未获放行 → 文件必须还在（到点暂停不执行）"
+
+    def test_放行后原样重放并真的执行(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        target = tmp_path / "victim.txt"
+        target.write_text("keep me", encoding="utf-8")
+        fake = _FakeLLM([_file_delete(str(target)), {"kind": "final"}])
+        monkeypatch.setattr(routes_module, "get_llm_client", lambda **k: fake)
+        tid = _plan_agentic(client, "删文件")
+        client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS)
+        prompts_before = len(fake.prompts)
+
+        body = client.post(
+            f"/tasks/{tid}/resume",
+            json={"approved_tools": ["file_delete"]},
+            headers=_LOCAL_HEADERS,
+        ).json()
+
+        assert body["status"] == "verifying"
+        assert body["pending_approval"] is None
+        assert not target.exists(), "放行后应真的执行删除"
+        # 重放那一步**不消耗新决策**（只多问一次，用于决定再下一步 → 脚本给 final）。
+        # 反证：若 resume 是重新问模型而不是重放，脚本第 2 项是 final，就不会执行删除、
+        # 文件也不会消失 —— 上面的断言已经把这条钉住。
+        assert len(fake.prompts) == prompts_before + 1
+        rows = [r for r in body["execution_results"] if r["step_id"] == "loop-001"]
+        assert len(rows) == 1
+        assert rows[0]["status"] == "done"
+        assert rows[0]["action"] == "file_delete"
+        assert body["loop_state"]["pending_decision"] is None
+
+    def test_工作区内写文件不再逐次审批(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """卡 44 的核心验收：写产出文件**不产生 pending_approval**，且真的落盘。
+
+        修复前：``file_write`` 属 high_risk → ``/run`` 直接挂成 ``interrupted`` 等放行
+        （用户看到的就是"它并不能去修改文件"）。
+        """
+        target = tmp_path / "note.txt"
         fake = _FakeLLM([_file_write(str(target)), {"kind": "final"}])
         monkeypatch.setattr(routes_module, "get_llm_client", lambda **k: fake)
         tid = _plan_agentic(client, "写文件")
 
         body = client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS).json()
 
-        assert body["status"] == "interrupted"
-        assert body["pending_approval"]["tools"] == ["file_write"]
-        assert body["pending_approval"]["steps"][0]["step_id"] == "loop-001"
-        assert body["execution_results"][0]["status"] == "pending_approval"
-        assert body["loop_state"]["pending_decision"]["action"] == "file_write"
-        assert not target.exists()  # 未获放行 → 未写盘
+        assert body["pending_approval"] is None, "工作区内写文件不该挂起等放行"
+        assert body["status"] == "verifying"
+        assert target.read_text(encoding="utf-8") == "hello"
+        assert body["execution_results"][0]["status"] == "done"
 
-    def test_放行后原样重放并写盘(
+    def test_越界写被沙箱拒绝且不会写盘(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
-        target = tmp_path / "out.txt"
-        fake = _FakeLLM([_file_write(str(target)), {"kind": "final"}])
+        """安全边界未被放松：工作区**外**的写依然拦得住。
+
+        注意这里的目标路径**不是** tmp_path（那正是工作区）；它指向工作区的上一级。
+        """
+        outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
+        fake = _FakeLLM([_file_write(str(outside)), {"kind": "final"}])
         monkeypatch.setattr(routes_module, "get_llm_client", lambda **k: fake)
-        tid = _plan_agentic(client, "写文件")
-        client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS)
-        prompts_before = len(fake.prompts)
+        tid = _plan_agentic(client, "往工作区外写文件")
 
-        body = client.post(
-            f"/tasks/{tid}/resume",
-            json={"approved_tools": ["file_write"]},
-            headers=_LOCAL_HEADERS,
-        ).json()
+        body = client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS).json()
 
-        assert body["status"] == "verifying"
-        assert body["pending_approval"] is None
-        assert target.read_text(encoding="utf-8") == "hello"
-        # 重放那一步**不消耗新决策**（只多问一次，用于决定再下一步 → 脚本给 final）。
-        # 反证：若 resume 是重新问模型而不是重放，脚本第 2 项是 final，就不会执行 file_write、
-        # 文件也不会被写出来 —— 上面 write 断言已经把这条钉住。
-        assert len(fake.prompts) == prompts_before + 1
-        rows = [r for r in body["execution_results"] if r["step_id"] == "loop-001"]
-        assert len(rows) == 1
-        assert rows[0]["status"] == "done"
-        assert rows[0]["action"] == "file_write"
-        assert body["loop_state"]["pending_decision"] is None
+        assert not outside.exists(), "越界写必须被拒绝，一个字节都不能落盘"
+        assert body["pending_approval"] is not None, "越界写应拦在放行之前，绝不放行执行"
+        assert body["pending_approval"]["tools"] == ["file_write"]
+        assert body["status"] == "interrupted"
 
     def test_放行后不继承空转计数(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
@@ -208,27 +264,27 @@ class TestAgenticApprovalGate:
         此前预算连 ``stagnant_rounds`` 一起续跑，于是「失败一轮 → 挂起 → 放行后写入
         又失败」被凑满 ``MAX_STAGNANT_ROUNDS``，明明才失败两次就提前停下。
         """
-        target = tmp_path / "exists.txt"
-        target.write_text("old", encoding="utf-8")  # 已存在 → 未授权覆盖 → 放行后仍失败
+        target = tmp_path / "keep.txt"
+        target.write_text("keep me", encoding="utf-8")
         fake = _FakeLLM(
-            [_fail_read(), _file_write(str(target)), {"kind": "final", "answer": "算了"}]
+            [_fail_read(), _file_delete(str(target)), {"kind": "final", "answer": "算了"}]
         )
         monkeypatch.setattr(routes_module, "get_llm_client", lambda **k: fake)
-        tid = _plan_agentic(client, "写一个已存在的文件")
+        tid = _plan_agentic(client, "删一个文件")
 
         first = client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS).json()
-        assert first["pending_approval"]["tools"] == ["file_write"]
+        assert first["pending_approval"]["tools"] == ["file_delete"]
         # 首见症状的失败**不算空转**（症状变了 = 世界变了 = 进展，见 agent_loop 的注释）；
         # 关键是它没有被推满 2，也没有跨放行继承。
         assert first["loop_state"]["budget"]["stagnant_rounds"] == 0
 
         body = client.post(
             f"/tasks/{tid}/resume",
-            json={"approved_tools": ["file_write"]},
+            json={"approved_tools": ["file_delete"]},
             headers=_LOCAL_HEADERS,
         ).json()
 
-        # 放行后这次写入失败（累计第 2 次），但空转计数已随放行清零 → 不判空转，继续收尾。
+        # 放行后这次删除成功、模型收尾 → 不判空转，正常收尾。
         assert body["loop_state"]["stopped_reason"] == "final"
         assert body["status"] == "verifying"
 
@@ -454,9 +510,11 @@ class TestConclusion:
     def test_挂起时结论只如实说在等放行(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
-        fake = _FakeLLM([_file_write(str(tmp_path / "out.txt")), {"kind": "final"}])
+        victim = tmp_path / "victim.txt"
+        victim.write_text("keep me", encoding="utf-8")
+        fake = _FakeLLM([_file_delete(str(victim)), {"kind": "final"}])
         monkeypatch.setattr(routes_module, "get_llm_client", lambda **k: fake)
-        tid = _plan_agentic(client, "写文件")
+        tid = _plan_agentic(client, "删文件")
 
         body = client.post(f"/tasks/{tid}/run", headers=_LOCAL_HEADERS).json()
 

@@ -6,6 +6,7 @@ import logging
 import os
 import tempfile
 import threading
+import time
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -15,7 +16,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from agent_builder.api.agent_loop import (
+    BUDGET_STEP_INCREMENT,
+    MAX_BUDGET_STEPS_LIMIT,
+    MAX_LOOP_STEPS,
     STEP_ID_PREFIX,
+    STOP_BUDGET_STEPS,
+    STOP_BUDGET_TOKENS,
     STOP_FINAL,
     STOP_INTERRUPTED,
     STOP_PENDING_APPROVAL,
@@ -27,6 +33,11 @@ from agent_builder.api.agent_loop import (
     run_step,
     to_execution_results,
     to_step,
+)
+from agent_builder.api.approval_store import (
+    grant_workspace_approvals,
+    read_workspace_approvals,
+    revoke_workspace_approvals,
 )
 from agent_builder.api.chat import classify_intent, missing_key_outcome
 from agent_builder.api.council import run_council
@@ -55,6 +66,13 @@ from agent_builder.api.orchestrator import (
     run_plan,
     take_tool_observation,
 )
+from agent_builder.api.project_log import (
+    ProjectLogEntry,
+    build_project_context,
+    read_project_log,
+    record_project_log,
+    workspace_file_snapshot,
+)
 from agent_builder.api.projects import (
     create_workspace_folder,
     pick_directory,
@@ -71,11 +89,16 @@ from agent_builder.api.role_catalog import build_catalog, is_high_risk
 from agent_builder.api.schemas import (
     ApiKeyRequest,
     ApiKeyStatusResponse,
+    CapabilitiesResponse,
+    CapabilityGroupView,
     ChatRequest,
     ChatResponse,
     CouncilRequest,
     DecomposeResponse,
+    DirectChatRequest,
+    DirectChatResponse,
     DirectoryPickResponse,
+    EffectiveOption,
     FileContentResponse,
     FileNode,
     FileWriteRequest,
@@ -93,10 +116,20 @@ from agent_builder.api.schemas import (
     ProjectResponse,
     ProposalView,
     TaskApproveRequest,
+    TaskContinueRequest,
     TaskCreateRequest,
+    TaskInstructRequest,
     TaskResponse,
     TaskResumeRequest,
     TaskSummary,
+)
+from agent_builder.api.secret_store import (
+    PERSIST_ENV,
+    delete_secret,
+    load_secret,
+    persist_enabled,
+    save_secret,
+    secret_path,
 )
 from agent_builder.api.secrets import (
     ApiKeyStore,
@@ -109,14 +142,23 @@ from agent_builder.api.secrets import (
 )
 from agent_builder.api.security import require_local_client
 from agent_builder.api.store import InMemoryTaskStore
-from agent_builder.contracts.errors import AgentError
+from agent_builder.contracts.errors import AgentError, model_error
 from agent_builder.contracts.schemas import ChangeProposal, Plan, Step
 from agent_builder.contracts.state_machine import TaskStatus
 from agent_builder.llm.client import UsageAccumulator, merge_usage, probe_api_key
 from agent_builder.llm.config import LLMConfig
 from agent_builder.narrate import action_title, conclude, summarize_result
 from agent_builder.roles.decomposer import Decomposer
-from agent_builder.tools.permissions import get_default_role_perms
+from agent_builder.tools.gatekeeper import inside_workspace, workspace_path
+from agent_builder.tools.permissions import (
+    CAPABILITY_GROUPS,
+    CAPABILITY_LABELS,
+    CAPABILITY_NOTES,
+    DEFAULT_CAPABILITIES,
+    WORKSPACE_SCOPED_WRITE_TOOLS,
+    filter_role_perms,
+    get_default_role_perms,
+)
 
 router = APIRouter()
 
@@ -128,6 +170,8 @@ MAX_EDITABLE_BYTES = 2 * 1024 * 1024
 
 # 可读执行计划的长度上限（只是给人看的摘要，不该长篇大论）。
 MAX_PLAN_TEXT_CHARS = 1200
+# 「上文」的长度上限：够放下上一任务的需求 + 结论 + 产出清单，又不至于把提示词撑爆。
+MAX_CONTEXT_CHARS = 4000
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +182,13 @@ _PLAN_TEXT_PROMPT = """你是执行编排的规划助手。请用**中文**给�
 1. 3~6 条，每条一行，用「1. 」「2. 」这样的序号开头；
 2. 每条写清「做什么 + 产出什么文件」，能确定就写文件路径；不要写空话套话；
 3. 最后单独一行以「验证：」开头，说明打算怎么证明做成了（跑什么、看什么）；
-4. 只输出计划本身：不要前后客套、不要 markdown 代码块、不要重复需求原文。
+4. **必须写明交付形态与入口**（CLI / Web 页面 / 库 / HTTP API）以及怎么启动。
+   需求只说「给我做一个 X」而没说形态时，**按"人能打开的东西"补齐**：
+   Web → 页面文件 + 提供页面的路由；CLI → 可执行入口 + 用法；
+   确实拿不准，就在最后加一行「待确认：要 CLI 还是 Web 页面」——
+   **不要默认只交一个后端库**（实测 2026-10-11：用户要"给我做一个 agent"，
+   计划只产出 `src/agent.py` + `main.py`，没有任何前端）。
+5. 只输出计划本身：不要前后客套、不要 markdown 代码块、不要重复需求原文。
 
 【需求】
 {requirement}"""
@@ -154,7 +204,67 @@ def _trim_plan_text(text: Any) -> str:
     return value[:MAX_PLAN_TEXT_CHARS]
 
 
-def _draft_plan_text(requirement: str, llm_client: Any) -> str:
+def _clean_context(raw: Any) -> str:
+    """清洗「上文」：去首尾空白、限长（**超长截断并注明**，绝不无声丢弃）。"""
+    value = str(raw or "").strip()
+    if len(value) > MAX_CONTEXT_CHARS:
+        value = value[:MAX_CONTEXT_CHARS] + f"…（上文过长，已截断；原文 {len(value)} 字）"
+    return value
+
+
+def _task_artifacts(entry: Any) -> list[str]:
+    """汇总任务产出（loop_state.artifacts + execution_results[].artifacts），去重保序。"""
+    paths: list[str] = []
+    loop_state = getattr(entry, "loop_state", None)
+    for path in getattr(loop_state, "artifacts", None) or []:
+        paths.append(str(path))
+    for item in getattr(entry, "execution_results", None) or []:
+        for path in (item.get("artifacts") if isinstance(item, dict) else None) or []:
+            paths.append(str(path))
+    seen: set[str] = set()
+    return [p for p in paths if p and not (p in seen or seen.add(p))]
+
+
+def _project_context_for_new_task(task_id: str) -> str:
+    """新任务的**自动上文**：来自工作区级项目日志。
+
+    这才是"后端自己记得"（实测 2026-10-11）：前端拼的上文在刷新 / 切项目 / 重启后即失效，
+    而项目日志落在**工作区里**、由后端在任务收尾时自动写入。
+    """
+    try:
+        workspace = _resolve_workspace_dir()
+    except Exception:  # noqa: BLE001 - 项目状态异常不该拦住建任务
+        return ""
+    return build_project_context(read_project_log(workspace), exclude_task_id=task_id)
+
+
+def _record_task_project_log(entry: Any) -> None:
+    """把任务收尾状态写进工作区级项目日志（跨任务、跨重启）。失败不影响主流程。"""
+    try:
+        workspace = _resolve_workspace_dir()
+        conductor = getattr(entry, "conductor", None)
+        state = conductor.task_state
+        task_id = str(state.task_id)
+        status = state.status.value if hasattr(state.status, "value") else str(state.status)
+        response = _to_task_response(entry, task_id)
+        record_project_log(
+            workspace,
+            ProjectLogEntry(
+                task_id=task_id,
+                requirement=str(getattr(entry, "requirement", "") or ""),
+                title=str(getattr(entry, "title", "") or ""),
+                status=status,
+                conclusion=str(getattr(response, "conclusion", "") or ""),
+                artifacts=_task_artifacts(entry),
+            ),
+        )
+    except Exception:  # 记账是旁路，任何异常都不能影响任务本身
+        logger.warning("项目日志记账失败（忽略）", exc_info=True)
+
+
+def _draft_plan_text(
+    requirement: str, llm_client: Any, context_note: str = "", workspace_note: str = ""
+) -> str:
     """让模型给一份**可读的执行计划**（只用于展示，不冻结执行）。
 
     为什么需要（实测 2026-10-11）：agentic 下 ``/plan`` 不跑 Decomposer、前端又只在
@@ -163,13 +273,25 @@ def _draft_plan_text(requirement: str, llm_client: Any) -> str:
 
     无可用客户端 / 调用失败 / 返回空 → **一律返回空串，绝不影响任务创建**
     （计划文本是锦上添花，不能拖垮主流程）。
+
+    ``context_note``（上文）会附在需求之后：规划时就要知道"后端已经存在"，
+    否则第二阶段的计划会把已完成的事再排一遍。
     """
     if llm_client is None:
         return ""
-    try:
-        text = llm_client.chat(
-            [{"role": "user", "content": _PLAN_TEXT_PROMPT.format(requirement=requirement)}]
+    prompt = _PLAN_TEXT_PROMPT.format(requirement=requirement)
+    if context_note:
+        prompt += (
+            "\n\n【上文】用户在同一个工作区里刚做完的事（据此判断哪些**已经做过**，"
+            "不要再排一遍）：\n" + context_note
         )
+    if workspace_note:
+        prompt += (
+            "\n\n【工作区现状】工作区里**已经有**这些文件（规划时要据此判断哪些已做完、"
+            "哪些要接着改；不要把已完成的再排一遍，也不要从零重写）：\n" + workspace_note
+        )
+    try:
+        text = llm_client.chat([{"role": "user", "content": prompt}])
     except Exception:  # 展示用信息，失败只记日志
         logger.warning("生成可读执行计划失败（忽略）", exc_info=True)
         return ""
@@ -187,17 +309,202 @@ def _resolve_workspace_dir() -> Path:
     return get_project_store().current_workspace_dir()
 
 
-def _high_risk_actions(steps: dict[str, Any]) -> list[str]:
+def _high_risk_actions(
+    steps: dict[str, Any],
+    *,
+    workspace: Path | None = None,
+    count_in_workspace_writes: bool = True,
+) -> list[str]:
     """本计划中属高风险（需审批）的 action 去重列表（跨角色并集）。
 
     高风险真源是 ``permissions.py`` 的 ``high_risk_tools``。此处取并集，供前端提示
     「哪些步骤需要逐工具授权」；运行时判定仍按步骤所属角色精确执行。
+
+    **按实际风险判定**（卡 44）：``file_write`` / ``file_edit`` 是否高危取决于**落到哪里**——
+    写在工作区内是本职工作（不算高危、不再打断用户），写到工作区外则由沙箱硬拒绝
+    （``E_PERMISSION``，不是"等放行"）。判定复用门卫的
+    :func:`agent_builder.tools.gatekeeper.inside_workspace`，不另写一套口径。
+
+    Args:
+        steps: ``step_id → Step``。
+        workspace: 判定用的工作区；None 用当前工作区。
+        count_in_workspace_writes: True 时把**工作区内的**写/改也计入高风险。这是**保守**
+            默认（用于「挂起判定」之外的场景）：不确定就该多提示一次，绝不漏标。
+            False 则按实际落点判定 —— 工作区内放行、工作区外仍算高风险。
+            （工作区外/给不出路径的写，无论这个开关怎么设都算高风险。）
     """
     gated: set[str] = set()
     for perm in get_default_role_perms().values():
         gated.update(perm.high_risk_tools)
-    actions = {str(getattr(step, "action", "")) for step in steps.values()}
-    return sorted(actions & gated)
+    risky: set[str] = set()
+    for step in steps.values():
+        action = str(getattr(step, "action", "") or "")
+        if not action:
+            continue
+        if action in gated:
+            risky.add(action)
+            continue
+        # 工作区边界类写/改：高危与否取决于**落到哪里**。
+        if action not in WORKSPACE_SCOPED_WRITE_TOOLS:
+            continue
+        if count_in_workspace_writes:
+            risky.add(action)  # 保守默认：不区分落点
+            continue
+        path_str = workspace_path(getattr(step, "inputs", None))
+        # 给不出路径 → 不能假设它落在工作区内（宁可多提示一次，也不能漏标）；
+        # 越界路径同样算高风险（真正执行时会被沙箱硬拒绝）。
+        if not path_str or not inside_workspace(path_str, workspace):
+            risky.add(action)
+    return sorted(risky)
+
+
+def _task_capabilities(entry: Any) -> set[str] | None:
+    """本任务启用的能力组；None = 全部启用（未在 ``/plan`` 里设过开关）。
+
+    **空列表与 None 必须区分**：``[]`` = 用户把能力全关了（只剩审计/记忆类基础设施），
+    None = 没设置过（沿用既有行为 = 全开）。写成 ``or None`` 会把两者混成同一个语义。
+    """
+    options = getattr(entry, "options", None) or {}
+    raw = options.get("capabilities")
+    if raw is None:
+        return None
+    return {str(item) for item in raw}
+
+
+def _task_role_perms(entry: Any) -> dict[str, Any]:
+    """本任务生效的角色权限矩阵（已按能力开关收窄）——审计/展示用。"""
+    return filter_role_perms(get_default_role_perms(), _task_capabilities(entry))
+
+
+def _run_self_check(entry: Any) -> None:
+    """执行收尾时跑一次「计划 ↔ 执行结果」一致性自检（卡 46b：**两种模式都生效**）。
+
+    为什么以前 agentic 下是空转：``self_check`` 只在固定工作流路径算过
+    （``_execute_plan`` 里），而 agentic 走的是 ``_execute_plan_agentic`` ——
+    界面上那个开关在默认模式下**永远没有任何效果**（用户"不知道有没有用"的直觉是对的）。
+
+    ⚠️ 它**只做客观核对**，不参与任何决策：题目里的硬约束是"不许降灵活性"，
+    所以这里既不读模型输出、也不改变终止原因 / 状态转换。
+    """
+    if not entry.options.get("self_check"):
+        return
+    plan = entry.conductor.task_state.plan
+    if plan is None:
+        return
+    entry.self_check = check_execution_consistency(plan, entry.steps, entry.execution_results)
+
+
+def _effective_options(
+    req: PlanRequest, *, decomposed: bool, model_available: bool
+) -> list[EffectiveOption]:
+    """把「本次各选项到底生效了没有」如实算出来（卡 46b）。
+
+    这是**纯汇报**，一行决策逻辑都不碰：agentic 的执行仍由模型逐轮主导
+    （``deciders.py`` / ``agent_loop.py`` 在本卡**零改动**）。
+
+    口径（与 ``PlanRequest`` 的字段描述一一对应）：
+
+    - ``decomposed``：本次是否真的跑了分解器（``mode=workflow`` 或有密钥回退固定工作流）；
+    - ``model_available``：本次是否有可用模型客户端。
+
+    为什么要这个：四个底部开关里，``use_llm`` 与 ``advanced`` 在 agentic 下**完全不生效**，
+    ``self_check`` 以前也只在固定工作流路径算 —— 用户"不知道有没有用"的直觉是对的。
+    现在要么让它生效（``self_check`` 已补到 agentic），要么**如实说"本模式不支持"**。
+    """
+    agentic = req.mode == "agentic"
+    options: list[EffectiveOption] = []
+
+    options.append(
+        EffectiveOption(
+            option="council",
+            label="评审会",
+            value=req.council,
+            applied=req.council,
+            detail=(
+                "规划前已召开评审会（多角色独立表态后收敛）"
+                if req.council
+                else "未开启"
+            ),
+        )
+    )
+    options.append(
+        EffectiveOption(
+            option="self_check",
+            label="执行自检",
+            value=req.self_check,
+            applied=req.self_check,
+            detail=(
+                "执行收尾会追加一次「计划 ↔ 执行结果」一致性核对（两种模式都生效）"
+                if req.self_check
+                else "未开启"
+            ),
+        )
+    )
+    options.append(
+        EffectiveOption(
+            option="sub_arch",
+            label="副结构",
+            value=req.sub_arch,
+            applied=bool(req.sub_arch and agentic and model_available),
+            detail=(
+                "模型可提议新角色 / 新工具（需你批准后落盘）"
+                if req.sub_arch and agentic and model_available
+                else (
+                    "已开启，但固定工作流不产生提议 → 本次无效果"
+                    if req.sub_arch and not agentic
+                    else (
+                        "已开启，但没有可用密钥 → agentic 会回退固定工作流，不会产生提议"
+                        if req.sub_arch
+                        else "未开启"
+                    )
+                )
+            ),
+        )
+    )
+    options.append(
+        EffectiveOption(
+            option="use_llm",
+            label="LLM 拆分",
+            value=req.use_llm,
+            applied=bool(req.use_llm and decomposed),
+            detail=(
+                "已用模型拆分需求（产出固定 DAG）"
+                if req.use_llm and decomposed
+                else (
+                    "未开启"
+                    if not req.use_llm
+                    else "agentic 下规划阶段不分解（模型在执行阶段逐轮决策），本项对本次规划无影响"
+                )
+            ),
+        )
+    )
+    options.append(
+        EffectiveOption(
+            option="advanced",
+            label="详细度",
+            value=req.advanced,
+            applied=decomposed,
+            detail=(
+                f"已作用于分解提示词（{req.advanced}）"
+                if decomposed
+                else "**本模式不适用**：agentic 规划阶段不跑分解器，详细度无处可施"
+            ),
+        )
+    )
+    options.append(
+        EffectiveOption(
+            option="capabilities",
+            label="技能（能力开关）",
+            value=req.capabilities,
+            applied=True,
+            detail=(
+                "已生效：该组之外的工具不会进入本任务的角色白名单，也不出现在能力目录里"
+                if req.capabilities is not None
+                else "未设置 → 全部能力启用"
+            ),
+        )
+    )
+    return options
 
 
 def _record_usage(entry: Any, accumulator: UsageAccumulator, *, mode: str | None = None) -> None:
@@ -324,13 +631,21 @@ def _to_task_response(entry_or_conductor: Any, task_id: str) -> TaskResponse:
         steps=step_payload,
         execution_results=execution_results,
         gatekeeper_audit=gatekeeper_audit,
-        high_risk_actions=_high_risk_actions(steps),
+        high_risk_actions=_high_risk_actions(
+            steps, workspace=_resolve_workspace_dir(), count_in_workspace_writes=False
+        ),
         self_check=self_check,
         council=council,
         title=getattr(entry_or_conductor, "title", "") or "",
         pending_approval=getattr(entry_or_conductor, "pending_approval", None),
         running=bool(getattr(entry_or_conductor, "running", False)),
         plan_text=getattr(entry_or_conductor, "plan_text", "") or "",
+        parent_task_id=getattr(entry_or_conductor, "parent_task_id", None) or "",
+        context_chars=len(getattr(entry_or_conductor, "context_note", "") or ""),
+        # 卡 50：追加的修改要求也要能被回看（前端据此显示"你改过哪几句"）。
+        follow_ups=list(getattr(entry_or_conductor, "follow_ups", None) or []),
+        # 用户点过几次「继续再跑一轮」（成本归因用）。
+        budget_extensions=int(getattr(entry_or_conductor, "budget_extensions", 0) or 0),
         loop_state=getattr(entry_or_conductor, "loop_state", None),
         pending_proposal=getattr(entry_or_conductor, "pending_proposal", None),
         proposals=getattr(entry_or_conductor, "proposals", None) or [],
@@ -346,6 +661,10 @@ def health() -> dict[str, str]:
 # ── API 密钥（安全优先：只进内存、不回显、不落盘）──────────────
 # 端点均挂 require_local_client：必须携带本机客户端标识头，拒绝跨站来源。
 
+# 当前密钥**从哪里来**（卡 47）：runtime（本进程 POST 保存）/ env（启动读环境变量）/
+# file（启动读落盘文件）/ none。只用于解释状态，不参与密钥派生。
+api_key_source: str = "none"
+
 
 def _iso_utc(ts: float | None) -> str | None:
     """把 Unix 时间戳转成 UTC ISO8601 字符串；None 透传。"""
@@ -354,10 +673,60 @@ def _iso_utc(ts: float | None) -> str | None:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def load_api_key_on_startup() -> str:
+    """启动时按顺序装载密钥：**环境变量 → 落盘文件 → 不加载**（卡 47）。
+
+    Returns:
+        实际来源：``env`` / ``file`` / ``none``（写进模块级 ``api_key_source``）。
+
+    修复的痛点（实测）：内存密钥在后端重启后**静默失效** ——
+    `GET /settings/api-key` 变 ``configured:false``，下一次 ``/run`` 才报 ``E_MODEL``，
+    用户完全看不出发生了什么（本次会话就踩了 8 次）。
+
+    ⚠️ **读落盘文件不做开关判断**：用户上次明确点了"记住密钥"，重启后就该恢复；
+    只有**写**才需要开关（见 ``api/secret_store.py`` 的说明）。
+    日志只记来源，**永不记密钥内容**。
+    """
+    global api_key_source
+    store = get_api_key_store()
+    if store.is_configured:
+        # 已经有人设过了（例如测试里预置），别覆盖。
+        return api_key_source
+    env_key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    if env_key:
+        try:
+            store.set_key(validate_api_key(env_key))
+        except InvalidApiKeyError as exc:
+            logger.warning("DEEPSEEK_API_KEY 不合法（忽略）：%s", exc)
+        else:
+            api_key_source = "env"
+            logger.info("启动装载密钥：来源=环境变量（内容不记录）")
+            return api_key_source
+    stored = load_secret()
+    if stored is not None:
+        try:
+            store.set_key(validate_api_key(stored.api_key))
+        except InvalidApiKeyError as exc:
+            logger.warning("落盘密钥不合法（忽略）：%s", exc)
+        else:
+            api_key_source = "file"
+            logger.info("启动装载密钥：来源=落盘文件 %s（内容不记录）", secret_path())
+            return api_key_source
+    api_key_source = "none"
+    return api_key_source
+
+
 def _key_status_payload(
-    store: ApiKeyStore, *, rotated_from: str | None = None
+    store: ApiKeyStore, *, rotated_from: str | None = None, source: str | None = None
 ) -> ApiKeyStatusResponse:
-    """统一的密钥状态响应构造（绝不包含密钥明文）。"""
+    """统一的密钥状态响应构造（绝不包含密钥明文）。
+
+    ``source`` 不传时按**当前来源记录**推导（``api_key_source``）：POST 保存过 = ``runtime``；
+    启动时从 env / 文件读入 = ``env`` / ``file``；都没有 = ``none``。
+    """
+    resolved = source if source is not None else (api_key_source or "none")
+    if not store.is_configured:
+        resolved = "none"
     return ApiKeyStatusResponse(
         configured=store.is_configured,
         masked=store.masked_hint(),
@@ -368,6 +737,12 @@ def _key_status_payload(
         rotation_count=store.rotation_count,
         rotated_at=_iso_utc(store.rotated_at),
         rotated_from_fingerprint=rotated_from,
+        source=resolved,
+        # 「是否已落盘」= **文件在不在**，不看环境开关。
+        # 为什么（实测 2026-10-11）：开关本身是进程级 env，重启就没了 —— 若跟着开关报，
+        # 就会出现"明明是从落盘文件读回来的（source=file），却显示 persisted=false"这种自相矛盾。
+        # 反向也成立：关闭落盘时文件会被删掉，所以"文件在"就等于"用户确实开过"。
+        persisted=secret_path().exists(),
     )
 
 
@@ -411,6 +786,11 @@ def set_api_key(
             raise HTTPException(status_code=400, detail=f"密钥连通性校验失败：{reason}")
     store = get_api_key_store()
     store.set_key(key, ttl_s=ttl)  # 复用同一校验；全部通过后才落库
+    global api_key_source
+    api_key_source = "runtime"
+    # 卡 47：只有在**显式开启**落盘时才写文件（默认关闭，保住"密钥不落盘"的既有约束）。
+    if persist_enabled():
+        save_secret(key, fingerprint=store.fingerprint() or "")
     return _key_status_payload(store)
 
 
@@ -460,15 +840,80 @@ def rotate_api_key(
     dependencies=[Depends(require_local_client)],
 )
 def delete_api_key() -> ApiKeyStatusResponse:
-    """删除已保存的 API 密钥（幂等）。"""
+    """删除已保存的 API 密钥（幂等）。
+
+    卡 47：**连落盘的那一份一起删**（否则"删了密钥"重启后又回来了，比不删更让人困惑）。
+    """
     store = get_api_key_store()
     store.clear()
+    delete_secret()
+    global api_key_source
+    api_key_source = "none"
+    return _key_status_payload(store, source="none")
+
+
+@router.post(
+    "/settings/api-key/persist",
+    response_model=ApiKeyStatusResponse,
+    dependencies=[Depends(require_local_client)],
+)
+def set_api_key_persistence(
+    persist: bool = Query(..., description="true = 把当前密钥落盘（重启后仍可用）；false = 删除落盘副本"),
+) -> ApiKeyStatusResponse:
+    """开启 / 关闭「密钥落盘」并立即对**当前密钥**生效（卡 47 的显式开关）。
+
+    为什么是显式开关而不是默认落盘：``secrets.py`` 的既有安全约束是"只驻内存、不落盘"，
+    并且有对抗性用例在守（全盘搜索无命中）。把它改成默认行为属于安全策略变更，
+    所以这里让**用户自己选**：
+
+    - ``persist=true`` + 已有密钥 → 落盘（0600、原子写、日志不记内容）；
+    - ``persist=true`` 但**没有**密钥 → 400（不写空文件，也不假装成功）；
+    - ``persist=false`` → 删除落盘副本，内存里的密钥保留（本进程内继续可用）。
+
+    注意：这里**不接受密钥明文**（不重复 POST 的校验路径），只对"当前已存的密钥"起作用。
+    """
+    store = get_api_key_store()
+    if persist:
+        current = store.get()
+        if not current:
+            raise HTTPException(status_code=400, detail="当前没有已保存的密钥，无法落盘")
+        if not save_secret(current, fingerprint=store.fingerprint() or ""):
+            raise HTTPException(status_code=500, detail="密钥落盘失败，请检查磁盘权限")
+        # 显式落盘 = 让"读文件"这条路下次开机生效。
+        os.environ[PERSIST_ENV] = "1"
+    else:
+        delete_secret()
+        os.environ.pop(PERSIST_ENV, None)
     return _key_status_payload(store)
 
 
 # ── 项目（工作区）──
 # 工作区由「项目」决定：选定目录 → 登记为项目 → 设为当前 → 后续 /workspace/* 均指向它。
 # 目录选择由后端弹系统对话框（浏览器安全模型下前端拿不到绝对路径）；边界校验见 projects.py。
+
+
+@router.delete(
+    "/projects/{project_id}",
+    response_model=ProjectResponse,
+    dependencies=[Depends(require_local_client)],
+)
+def delete_project(project_id: str) -> ProjectResponse:
+    """从注册表里移除一个项目（**只删登记，不动磁盘**）。
+
+    为什么需要（实测 2026-10-11）：用户把工作区目录删掉之后，注册表里会留下一堆
+    「点进去就 400」的死条目，项目列表变得不可用 —— 而此前**没有任何删除入口**。
+
+    约束：**当前工作区与内置默认工作区不可移除**（``current()`` 会回退到内置 default 项目，
+    那等于把工作区静默换成产品源码根）。
+    """
+    store = get_project_store()
+    if store.get(project_id) is None:
+        raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
+    try:
+        project = store.remove(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ProjectResponse(**asdict(project))
 
 
 @router.get(
@@ -704,6 +1149,85 @@ def chat(req: ChatRequest) -> ChatResponse:
     return ChatResponse(kind=outcome.kind, reply=outcome.reply, reason=outcome.reason)
 
 
+def _direct_messages(req: DirectChatRequest) -> list[dict[str, str]]:
+    """组装转发给模型的消息：system（可选）+ 历史 + 本轮输入。
+
+    **原样转发**：不做意图判定、不加提示词装饰 —— 直连的意义就是"前端只有大模型"。
+    """
+    messages: list[dict[str, str]] = []
+    if req.system.strip():
+        messages.append({"role": "system", "content": req.system})
+    for turn in req.messages:
+        role = str(turn.role or "").strip()
+        content = str(turn.content or "")
+        if role in ("user", "assistant", "system") and content:
+            messages.append({"role": role, "content": content})
+    tail = req.message.strip()
+    if tail:
+        messages.append({"role": "user", "content": tail})
+    return messages
+
+
+def _client_usage(client: Any) -> dict[str, Any]:
+    """取客户端累计用量（取不到返回空表）—— 直连也要让用户看见花了多少。"""
+    usage = getattr(client, "usage", None)
+    to_dict = getattr(usage, "to_dict", None)
+    if not callable(to_dict):
+        return {}
+    try:
+        payload = to_dict()
+    except Exception:  # noqa: BLE001 - 用量是旁路信息，取不到就算了
+        return {}
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+@router.post(
+    "/llm/chat",
+    response_model=DirectChatResponse,
+    dependencies=[Depends(require_local_client)],
+)
+def direct_llm_chat(req: DirectChatRequest) -> DirectChatResponse:
+    """**直连大模型**：把大模型与工作流拆开，前端只跟模型对话（「LLM 拆分」开关）。
+
+    为什么单独开一个端点、而不是给 ``/chat`` 加开关：两条语义混在一个函数里迟早纠缠
+    （``/chat`` 要判断"要不要干活"）。而本端点的验收标准恰恰是"**不产生任何任务、
+    不写工作区**"（见 ``tests/test_api_direct_llm.py``）。
+
+    安全性：直连会原样转发用户消息，属于"把模型暴露给前端"，因此**必须**挂本机标识闸门
+    （``require_local_client``）—— 否则它就是一个对外裸奔的 LLM 代理。
+    """
+    client = get_llm_client(model=req.model, temperature=req.temperature)
+    if client is None:
+        raise HTTPException(
+            status_code=409,
+            detail=model_error(
+                "未配置可用的模型密钥，直连大模型无法工作；请先在顶部保存 API 密钥",
+                "api.routes",
+                "direct-llm",
+            ).to_dict(),
+        )
+    messages = _direct_messages(req)
+    if not messages:
+        raise HTTPException(status_code=400, detail="messages 与 message 不能同时为空")
+    started = time.perf_counter()
+    reply = client.chat(messages)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    if not reply:
+        # LLMClient 调用失败时降级为空串 —— 直连必须如实报错，不能"成功返回空回复"。
+        raise HTTPException(
+            status_code=502,
+            detail=model_error(
+                "模型没有返回内容（请检查密钥、网络或模型名）", "api.routes", "direct-llm"
+            ).to_dict(),
+        )
+    return DirectChatResponse(
+        reply=reply,
+        model=req.model or "",
+        duration_ms=elapsed_ms,
+        usage=_client_usage(client),
+    )
+
+
 @router.post("/tasks", response_model=TaskResponse, status_code=201)
 def create_task(
     req: TaskCreateRequest,
@@ -717,6 +1241,18 @@ def create_task(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except AgentError as exc:
         raise HTTPException(status_code=400, detail=exc.to_dict()) from exc
+    # 续接：把「上文」落到任务上（只进提示词，不改变任务语义）。
+    entry = store.get(task_id)
+    if entry is not None:
+        # **后端自己记得**：工作区级项目日志优先于前端传的上文（前者跨重启、覆盖多轮）；
+        # 前端传的上文只作为"该工作区还没有日志"时的兜底。
+        auto_context = _project_context_for_new_task(task_id)
+        entry.context_note = _clean_context(auto_context or req.context)
+        entry.parent_task_id = (req.parent_task_id or "").strip() or None
+        # 工作区级放行记录：新任务**一开始就**带着它，所以「新任务从空集合开始」
+        # 这个让用户每写一次文件都要重批的行为（卡 44）不再存在。
+        seed_workspace_approvals(entry)
+        return _to_task_response(entry, task_id)
     return _to_task_response(conductor, task_id)
 
 
@@ -738,6 +1274,65 @@ def list_tasks(
 ) -> list[str]:
     """列出所有任务 ID。"""
     return store.list_all()
+
+
+@router.get(
+    "/capabilities",
+    response_model=CapabilitiesResponse,
+    dependencies=[Depends(require_local_client)],
+)
+def get_capabilities() -> CapabilitiesResponse:
+    """**真实**能力清单（卡 45）：左栏「技能 / 插件」面板的唯一数据来源。
+
+    为什么要有这个端点：此前那三个开关**没有任何后端出处**，点了不生效、也不持久化
+    （前端自己写着"尚未接入后端，仅作展示"）。现在每一项都能追到这里，而这里的每一项
+    又都能追到 ``tools/permissions.py`` 的权限矩阵与能力组映射 —— 不存在"没有出处的开关"。
+
+    插件区**如实为空**（``plugins=[]`` + ``plugins_note``）：后端没有插件系统，
+    界面必须显示说明而不是画三个假条目。
+
+    挂 ``require_local_client``：能力清单会**枚举本机可用的工具与角色**
+    （属于内部信息），与 ``/projects`` / ``/workspace/*`` 同档。
+    """
+    workspace = _resolve_workspace_dir()
+    perms = get_default_role_perms()
+    groups: list[CapabilityGroupView] = []
+    for group in sorted(CAPABILITY_GROUPS):
+        tools = sorted(CAPABILITY_GROUPS[group])
+        gated = sorted(
+            {
+                tool
+                for perm in perms.values()
+                for tool in perm.high_risk_tools
+                if tool in CAPABILITY_GROUPS[group]
+            }
+        )
+        roles = sorted(
+            role for role, perm in perms.items() if set(perm.allowed_tools) & set(tools)
+        )
+        groups.append(
+            CapabilityGroupView(
+                group=group,
+                label=CAPABILITY_LABELS.get(group, group),
+                note=CAPABILITY_NOTES.get(group, ""),
+                tools=tools,
+                high_risk_tools=gated,
+                roles=roles,
+            )
+        )
+    gated_all = sorted({tool for perm in perms.values() for tool in perm.high_risk_tools})
+    return CapabilitiesResponse(
+        workspace=str(workspace),
+        default_capabilities=sorted(DEFAULT_CAPABILITIES),
+        capability_groups=groups,
+        roles={role: sorted(perm.allowed_tools) for role, perm in sorted(perms.items())},
+        high_risk_tools=gated_all,
+        plugins=[],
+        plugins_note=(
+            "后端尚未实现插件系统：这里的插件清单恒为空。"
+            "「海报生成 / 网页抓取 / Git 集成」这类条目一律不再显示 —— 它们从来没有后端出处。"
+        ),
+    )
 
 
 @router.get("/task-summaries", response_model=list[TaskSummary])
@@ -819,6 +1414,10 @@ def plan_task(
         # 执行形态与副结构门控（P1）：执行阶段（/run、/approve、/resume）读取。
         "mode": req.mode,
         "sub_arch": req.sub_arch,
+        # 任务级能力开关（卡 45）：None = 全部启用；执行阶段按它收窄角色白名单与能力目录。
+        "capabilities": list(req.capabilities) if req.capabilities is not None else None,
+        # 步数预算（用户可给大些一次跑完；跑满仍会停下来问要不要续）。
+        "max_steps": req.max_steps,
     }
     # 任务级 token 计量：规划阶段（decomposer）的用量也计入该任务。
     plan_usage = UsageAccumulator()
@@ -878,6 +1477,8 @@ def plan_task(
                 temperature=req.temperature,
                 role_brief_mode=req.role_brief,
             ),
+            entry.context_note,
+            workspace_file_snapshot(_resolve_workspace_dir()),
         )
         _record_usage(entry, plan_usage, mode=req.role_brief)
         status = conductor.task_state.status
@@ -887,6 +1488,9 @@ def plan_task(
             mode=req.mode,
             council=entry.council,
             plan_text=entry.plan_text,
+            effective_options=_effective_options(
+                req, decomposed=False, model_available=llm_client is not None
+            ),
         )
 
     decomposer = Decomposer(correlation_id=task_id)
@@ -928,6 +1532,10 @@ def plan_task(
         pending_questions=result.pending_questions,
         high_risk_actions=_high_risk_actions(result.steps),
         council=entry.council,
+        # 这一条路径**真的跑了分解器** → advanced / use_llm 本次确实生效。
+        effective_options=_effective_options(
+            req, decomposed=True, model_available=llm_client is not None
+        ),
     )
 
 
@@ -961,14 +1569,46 @@ def run_council_endpoint(
     return minutes
 
 
-def _pending_high_risk(entry: Any) -> dict[str, Any] | None:
+def _needs_approval(step: Any, workspace: Path | None = None) -> bool:
+    """这一步在**执行前**是否需要用户放行（「到点暂停」的判定入口）。
+
+    与 :func:`_pending_high_risk` / :func:`_high_risk_actions` 同源同口径，保证
+    "计划里被标成待放行的"与"执行时真的停下来等的"是同一件事。
+    """
+    action = str(getattr(step, "action", "") or "")
+    if not action:
+        return False
+    if is_high_risk(str(getattr(step, "assignee", "") or ""), action):
+        return True
+    if action not in WORKSPACE_SCOPED_WRITE_TOOLS:
+        return False
+    # 写在**工作区外**：沙箱会硬拒绝，绝不能悄悄执行；先按"待放行"挂起（不会执行）。
+    path_str = workspace_path(getattr(step, "inputs", None))
+    return not path_str or not inside_workspace(path_str, workspace)
+
+
+def _pending_high_risk(entry: Any, workspace: Path | None = None) -> dict[str, Any] | None:
     """列出计划中**尚未被放行**的高风险步骤；全部已放行或无高风险时返回 None。
 
     「到点暂停」的判定依据：只要存在未放行的高风险动作，任务就挂起等用户决定，
     而不是让门卫把它判成不可重试的失败（E_PERMISSION）。
+
+    **按实际风险判定**（卡 44）：工作区内的 ``file_write`` / ``file_edit`` 不再挂起
+    （写产出文件是本职工作，边界由沙箱兜底）；确需放行的只剩
+    ``file_delete`` / ``git_commit`` / ``rollback``。判定与门卫同口径
+    （``inside_workspace``），因此这里与应用层的"要不要暂停"不会各说一套。
+
+    Args:
+        workspace: 判定用的工作区；None 用当前工作区（与实际执行时门卫用的是同一个）。
     """
     steps = getattr(entry, "steps", None) or {}
-    risky = set(_high_risk_actions(steps))
+    risky = set(
+        _high_risk_actions(
+            steps,
+            workspace=workspace if workspace is not None else _resolve_workspace_dir(),
+            count_in_workspace_writes=False,
+        )
+    )
     granted = getattr(entry, "approved_tools", None) or set()
     ungranted = [
         {"step_id": sid, "action": step.action}
@@ -995,6 +1635,29 @@ def _mark_plan_ready(entry: Any, task_id: str) -> None:
         conductor.handle_plan_ready()  # PLANNING → AWAITING_CONFIRM
     except AgentError as exc:
         raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+
+
+def seed_workspace_approvals(entry: Any) -> None:
+    """把**工作区级**已放行的能力并进任务级授权集合（读侧容错，绝不抛）。
+
+    卡 44 验收标准 4：放行记录按工作区持久化，重启后端 / 新任务都不必重复问同一类工具。
+    这里只做"读回来"，写回在 :func:`grant_approvals`。
+    """
+    workspace = _resolve_workspace_dir()
+    entry.approved_tools = set(getattr(entry, "approved_tools", None) or set()) | (
+        read_workspace_approvals(workspace)
+    )
+
+
+def grant_approvals(entry: Any, tools: set[str]) -> None:
+    """放行 ``tools``：写进任务级集合，**并落盘到工作区级记录**。
+
+    落盘失败不影响本次放行（任务照常继续），只是"下次不再问"没记住。
+    """
+    if not tools:
+        return
+    entry.approved_tools = set(getattr(entry, "approved_tools", None) or set()) | set(tools)
+    grant_workspace_approvals(_resolve_workspace_dir(), set(tools))
 
 
 def _pause_for_high_risk(entry: Any, task_id: str) -> TaskResponse:
@@ -1118,6 +1781,7 @@ def _execute_plan(entry: Any, task_id: str, approved_tools: set[str]) -> None:
             llm_client=exec_llm_client,
             role_brief_mode=brief_mode,
             approved_tools=approved_tools,
+            capabilities=_task_capabilities(entry),
         )
     except AgentError as exc:
         raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
@@ -1131,8 +1795,7 @@ def _execute_plan(entry: Any, task_id: str, approved_tools: set[str]) -> None:
     conductor.touch()
 
     # 副结构自检（开关在 /plan 阶段设置）：纯计算核对，不改变执行结论。
-    if entry.options.get("self_check"):
-        entry.self_check = check_execution_consistency(plan, entry.steps, execution_results)
+    _run_self_check(entry)
 
     # 全部 done → 转 VERIFYING；否则保持 EXECUTING 让用户决策。
     all_done = bool(execution_results) and all(
@@ -1263,11 +1926,16 @@ def _execute_plan_agentic(
     conductor = entry.conductor
     brief_mode = entry.options.get("role_brief")
     sub_arch = bool(entry.options.get("sub_arch"))
+    # 工作区**只取一次**：下面既用它喂提示词（工作区现状），也用它做"这一步要不要放行"的
+    # 判定 —— 两处必须是同一个值，否则"按工作区判定"会与实际执行时的门卫各说一套。
+    workspace_dir = _resolve_workspace_dir()
+    capabilities = _task_capabilities(entry)
     executor, gatekeeper = build_step_executor(
         task_id,
         llm_client=llm_client,
         role_brief_mode=brief_mode,
         approved_tools=approved_tools,
+        capabilities=capabilities,
     )
 
     # 续跑：从 loop_state 恢复历史 / 产物 / 预算与轮次偏移（没有则从零开始）。
@@ -1294,17 +1962,34 @@ def _execute_plan_agentic(
     ]
     context = LoopContext(
         requirement=entry.requirement,
-        catalog=build_catalog(sub_arch=sub_arch),
+        catalog=build_catalog(sub_arch=sub_arch, capabilities=capabilities),
         history=history,
         artifacts=list(previous.artifacts) if previous is not None else [],
         allow_propose=sub_arch,
+        context_note=entry.context_note,
+        workspace_note=workspace_file_snapshot(workspace_dir),
+        # 卡 50：用户追加的修改要求 —— 与原始需求分开标注给模型。
+        follow_ups=list(getattr(entry, "follow_ups", None) or []),
     )
     # 步数 / token 累计（兜住无限往复）；空转计数**不跨放行继承** —— 用户放行是一次
     # 新的干预，理应给一轮新机会，否则「挂起 + 放行后一次失败」会被凑成两轮空转而过早停下。
-    budget = LoopBudget(
-        steps_used=previous_budget.steps_used if previous_budget else 0,
-        tokens_used=previous_budget.tokens_used if previous_budget else 0,
-    )
+    #
+    # 卡：步数硬顶**由用户决定**（``entry.options["max_steps"]``，默认 MAX_LOOP_STEPS）——
+    # 跑满后循环停下问用户"要不要再来一轮"（``POST /tasks/{id}/continue``），
+    # 而不是把"20 步没收敛"直接判死。
+    budget_steps = int(entry.options.get("max_steps") or MAX_LOOP_STEPS)
+    #
+    # 卡 50：**追加修改要求时步数预算另起一轮**。理由与放行同源 —— 用户说"把 X 改成 Y"
+    # 是一次新干预，如果沿用上一轮已经烧光的预算，追加的指令会**一次都不执行**就被
+    # 预算闸门判停（用户看到的就是"改了但它没动"）。token 计量仍累计进任务用量（记账不丢）。
+    if entry.follow_ups and previous_budget is not None:
+        budget = LoopBudget(max_steps=budget_steps)
+    else:
+        budget = LoopBudget(
+            max_steps=budget_steps,
+            steps_used=previous_budget.steps_used if previous_budget else 0,
+            tokens_used=previous_budget.tokens_used if previous_budget else 0,
+        )
     decider: Any = LLMRouteDecider(llm_client=llm_client)
     if previous is not None and previous.pending_decision is not None:
         decider = PrefixedDecider(
@@ -1317,8 +2002,12 @@ def _execute_plan_agentic(
         「到点暂停」必须在**进入工具链之前**判定：门卫对未授权高风险工具的裁决是
         ``E_PERMISSION``（失败），而产品语义是"等用户拍板"（挂起），两者不能混。
         门卫仍会在真正执行时兜底（放行集合与角色权限不一致时依旧拦下）。
+
+        **按实际风险判定**（卡 44）：工作区内的写/改不再挂起（写产出文件是本职工作），
+        真正需要放行的是删除 / 提交 / 回滚，以及**落到工作区外**的路径 —— 后者不放行
+        也不执行，门卫会硬拒绝。
         """
-        if is_high_risk(step.assignee or "", step.action) and step.action not in approved_tools:
+        if _needs_approval(step, workspace_dir) and step.action not in approved_tools:
             return StepOutcome(
                 status="pending_approval",
                 summary=f"等待你放行：{action_title(step.action)}",
@@ -1367,6 +2056,8 @@ def _execute_plan_agentic(
     entry.gatekeeper_audit = gatekeeper.snapshot()
     entry.loop_state = _loop_state_from(outcome, budget, context, base_rounds=base_rounds)
     _sync_step_status(entry)  # steps 状态与执行结果对齐（否则永远是 pending）
+    # 卡 46b：「执行自检」在 agentic 下也真的生效（以前只在固定工作流路径算过）。
+    _run_self_check(entry)
 
     # 用户中断：状态已由 /interrupt 翻成 interrupted，这里**不做任何收尾转换**
     # （否则「结果都 done」会把中断中的任务误推到 verifying，覆盖用户的暂停意图）。
@@ -1532,6 +2223,168 @@ def reject_proposal(
     return _decide_proposal(entry, task_id, approve=False)
 
 
+@router.post("/tasks/{task_id}/instruct", response_model=TaskResponse)
+def instruct_task(
+    task_id: str,
+    req: TaskInstructRequest,
+    store: InMemoryTaskStore = Depends(get_store),
+) -> TaskResponse:
+    """**在同一个任务上追加修改要求**（卡 50）——"不满意就改"的闭环入口。
+
+    用户的痛点原话："做的不满意也没法改"。此前只能再发一句，而那是**新建任务**：
+    模型从零开始，把工作区里已经做好的东西重做一遍（甚至覆盖掉）。
+
+    这里的语义是：
+
+    - **不新建任务**：指令挂到当前任务上，``task_id`` 不变；
+    - 追加的指令与**原始需求分开**进提示词（``LoopContext.follow_ups``），
+      并明确告诉模型"在已有产物上改、不要从零重做"；
+    - 复用**已有的** agentic 循环与状态机，不加旁路：把任务摆回 EXECUTING 后
+      调用 ``_execute_plan``（历史 / 产物 / 预算都从 ``loop_state`` 续，见
+      ``_execute_plan_agentic`` 的续跑分支）；
+    - 追加要求会**如实记账**在 ``TaskEntry.follow_ups``（供回看与提示词）。
+
+    允许的来源状态：``verifying``（跑完了、还没交付）与 ``interrupted``
+    （到点暂停 / 用户中断）—— 这两条都**已有**状态机转换可以回到 EXECUTING。
+    ``failed``（已放弃）与 ``delivered``（已交付）是终态、契约里没有回去的转换，
+    所以这里**如实拒绝并给下一步**，而不是偷偷改契约或硬塞状态。
+    正在执行的任务也拒绝（409）：否则两个线程会同时改同一份状态。
+    """
+    entry = store.get(task_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    _assert_not_running(entry, task_id)
+
+    instruction = (req.instruction or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="追加的修改要求不能为空")
+
+    conductor = entry.conductor
+    status = conductor.task_state.status
+    if status in (TaskStatus.DELIVERED, TaskStatus.FAILED):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"任务已{'交付' if status is TaskStatus.DELIVERED else '放弃'}，"
+                "状态机里没有从终态回到执行的转换；请另起一个新任务再改"
+            ),
+        )
+    if status in (TaskStatus.RECEIVED, TaskStatus.PLANNING, TaskStatus.AWAITING_CONFIRM):
+        raise HTTPException(
+            status_code=409,
+            detail="任务还没执行过，追加修改没有意义；请直接改需求或重新规划",
+        )
+    if status is TaskStatus.EXECUTING:
+        raise HTTPException(
+            status_code=409,
+            detail="任务正在执行中，请等它结束或先中断后再追加修改",
+        )
+
+    # 记账：追加要求本身也是一条事实（回看 / 提示词都用它）。
+    entry.follow_ups = list(entry.follow_ups) + [instruction]
+
+    _reopen_for_execution(entry)
+    if req.wait:
+        _execute_plan(entry, task_id, entry.approved_tools)
+        _record_task_project_log(entry)
+    else:
+        _start_background_execution(entry, task_id, entry.approved_tools)
+    return _to_task_response(entry, task_id)
+
+
+def _reopen_for_execution(entry: Any) -> None:
+    """把一个**已停下**的任务摆回可执行态（``/instruct`` 与 ``/continue`` 共用）。
+
+    **复用状态机既有转换，不加新事件、不改契约**：
+
+    - ``verifying`` →（``verify_failed``）``reworking`` →（``rework_done``）``executing``
+    - ``interrupted`` →（``resume``）``executing``
+    - 已经是 ``executing``（非收敛停下就停在这个状态）→ 无需转换，原样返回
+
+    ``verifying`` 那条路会碰 ``retry_count``：**先把计数清零** —— 用户主动要求"再来一轮"
+    是**一次新干预**，不是"同一件工作又失败了"，否则几下之后就会撞上契约的 ``MAX_RETRY``
+    被判成"修不好"→ abort（实测在 ``/instruct`` 上第 3 次就踩到）。
+    """
+    conductor = entry.conductor
+    status = conductor.task_state.status
+    try:
+        if status is TaskStatus.VERIFYING:
+            conductor.task_state.retry_count = 0
+            conductor.handle_verify_failed()  # → reworking
+            conductor.handle_rework_done()  # → executing
+        elif status is TaskStatus.INTERRUPTED:
+            conductor.handle_resume()  # → executing
+        # executing：非收敛停下时状态就停在这里，不需要任何转换
+    except AgentError as exc:
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+
+
+def _budget_stopped(entry: Any) -> bool:
+    """任务是否是**预算用满**导致的非收敛停下（``/continue`` 的准入条件）。"""
+    loop = getattr(entry, "loop_state", None)
+    reason = str(getattr(loop, "stopped_reason", "") or "")
+    return reason in (STOP_BUDGET_STEPS, STOP_BUDGET_TOKENS)
+
+
+@router.post("/tasks/{task_id}/continue", response_model=TaskResponse)
+def continue_task(
+    task_id: str,
+    req: TaskContinueRequest | None = None,
+    store: InMemoryTaskStore = Depends(get_store),
+) -> TaskResponse:
+    """**用户决定"再来一轮预算"** —— 预算用满后由用户拍板，而不是直接判死。
+
+    背景（用户反馈）：20 轮预算跑完，界面只给「放弃任务」，等于**直接判死**。
+    但"跑满 20 步还没收敛"不等于"这事做不成"——实测常见是差几步收尾。
+
+    准入条件（**必须真的是预算停下**，否则 409）：``loop_state.stopped_reason`` 是
+    ``budget_steps`` 或 ``budget_tokens``。空转 / 决策不可解析停下**不在**这里续 ——
+    那两种是"模型没招了"，再多给步数也是烧钱，该改需求或放弃。
+
+    行为：预算上浮（默认 +20，累计不超过 ``MAX_BUDGET_STEPS_LIMIT``）→ 摆回执行态 →
+    复用已有的 agentic 循环继续跑（历史 / 产物 / 轮次都从 ``loop_state`` 续，
+    所以模型看得见自己刚才做到哪）。
+    """
+    entry = store.get(task_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    _assert_not_running(entry, task_id)
+
+    if not _budget_stopped(entry):
+        loop = getattr(entry, "loop_state", None)
+        reason = str(getattr(loop, "stopped_reason", "") or "（没有停下记录）")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"当前任务不是「预算用满」停下（stopped_reason={reason}），无需续跑；"
+                "如果是空转 / 决策不可解析停下，请把需求说得更具体后重新发送，或放弃任务"
+            ),
+        )
+
+    increment = req.additional_steps if req and req.additional_steps > 0 else BUDGET_STEP_INCREMENT
+    current = int(entry.options.get("max_steps") or MAX_LOOP_STEPS)
+    target = current + increment
+    if target > MAX_BUDGET_STEPS_LIMIT:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"续跑已达上限（当前 {current} 步，上限 {MAX_BUDGET_STEPS_LIMIT} 步）；"
+                "再跑下去成本不可控，请改需求重开任务，或直接放弃"
+            ),
+        )
+
+    entry.options["max_steps"] = target
+    entry.budget_extensions = int(getattr(entry, "budget_extensions", 0) or 0) + 1
+    _reopen_for_execution(entry)
+
+    if req is None or req.wait:
+        _execute_plan(entry, task_id, entry.approved_tools)
+        _record_task_project_log(entry)
+    else:
+        _start_background_execution(entry, task_id, entry.approved_tools)
+    return _to_task_response(entry, task_id)
+
+
 def _assert_not_running(entry: Any, task_id: str) -> None:
     """同一任务不允许并发起两次后台执行（否则两个线程会同时改同一份任务状态）。"""
     if getattr(entry, "running", False):
@@ -1559,6 +2412,8 @@ def _start_background_execution(entry: Any, task_id: str, approved_tools: set[st
             logger.exception("后台执行任务失败：%s", task_id)
         finally:
             entry.running = False
+            # 后台路径同样要记进工作区项目日志（否则异步跑的任务"没留下记忆"）。
+            _record_task_project_log(entry)
 
     threading.Thread(target=_worker, name=f"task-run-{task_id[:8]}", daemon=True).start()
 
@@ -1612,8 +2467,10 @@ def run_task(
     except AgentError as exc:
         raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
 
+    # 先把**工作区级**已放行的能力读回来：新任务不必重批同一类工具（卡 44 验收 4）。
+    seed_workspace_approvals(entry)
     if req and req.approved_tools:
-        entry.approved_tools |= set(req.approved_tools)
+        grant_approvals(entry, set(req.approved_tools))
 
     if _pending_high_risk(entry) is not None:
         return _pause_for_high_risk(entry, task_id)
@@ -1621,6 +2478,7 @@ def run_task(
     entry.pending_approval = None
     if wait:
         _execute_plan(entry, task_id, entry.approved_tools)
+        _record_task_project_log(entry)
     else:
         _start_background_execution(entry, task_id, entry.approved_tools)
     return _to_task_response(entry, task_id)
@@ -1654,13 +2512,15 @@ def approve_task(
         raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
 
     # 逐工具授权：仅显式列出的高风险工具才带 granted_by 通过审批门（省略 = 不授权）。
+    # 用户的显式放行**按工作区记住**（落盘），新任务 / 重启后不再重复问同一类工具。
     approved_tools: set[str] = (
         set(req.approved_tools) if req and req.approved_tools else set()
     )
-    entry.approved_tools |= approved_tools
+    grant_approvals(entry, approved_tools)
     entry.pending_approval = None
     # 注意：这里只传本次显式授权的集合（严格契约），累积集合只用于 /run 与 /resume。
     _execute_plan(entry, task_id, approved_tools)
+    _record_task_project_log(entry)
     return _to_task_response(entry, task_id)
 
 
@@ -1679,9 +2539,12 @@ def reject_task(
     高风险步骤，计划即将被重新生成，留着会让任务列表继续显示「待放行」、
     并可能让用户对已作废的计划点「放行」。
 
-    同时**清零任务级放行记录** ``approved_tools``：改计划 = 作废旧计划的授权，
+    同时**清零放行记录**（任务级 + 工作区级）：改计划 = 作废旧计划的授权，
     新计划里的高风险步骤必须重新逐工具放行（否则旧授权会「继承」到一份用户还没
     看过的计划上，静默执行写 / 删 / 提交）。
+
+    ⚠️ 工作区级记录必须**一并撤销**（卡 44）：否则新计划一执行就会从工作区文件里
+    把旧授权读回来，"清零"只在内存里做样子、实际上一轮就复活了。
     """
     entry = store.get(task_id)
     if entry is None:
@@ -1692,6 +2555,7 @@ def reject_task(
         raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
     entry.pending_approval = None
     entry.approved_tools = set()
+    revoke_workspace_approvals(_resolve_workspace_dir())
     return _to_task_response(entry, task_id)
 
 
@@ -1701,7 +2565,13 @@ def interrupt_task(
     req: InterruptRequest,
     store: InMemoryTaskStore = Depends(get_store),
 ) -> TaskResponse:
-    """用户中断 → 状态转 INTERRUPTED。"""
+    """用户中断 → 状态转 INTERRUPTED。
+
+    同时**清掉** ``pending_approval``：那份清单描述的是"被暂停前正等着你放行的那一步"，
+    用户已经选择中断了，再挂着「待放行」只会让列表出现一个点不了的标记
+    （实测 2026-10-11：``abort``/``interrupt`` 后任务已是终态、却仍带 ``has_pending_approval``）。
+    清掉不影响「恢复」：``/resume`` 走的是 ``loop_state.pending_decision``，不依赖这份清单。
+    """
     entry = store.get(task_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
@@ -1709,6 +2579,8 @@ def interrupt_task(
         entry.conductor.handle_interrupt(req.reason)  # EXECUTING → INTERRUPTED
     except AgentError as exc:
         raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+    entry.pending_approval = None
+    _record_task_project_log(entry)
     return _to_task_response(entry, task_id)
 
 
@@ -1745,8 +2617,10 @@ def resume_task(
     except AgentError as exc:
         raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
 
+    # 放行按工作区记住（落盘）：同一工作区的新任务不再重复问同一类工具。
+    seed_workspace_approvals(entry)
     if req and req.approved_tools:
-        entry.approved_tools |= set(req.approved_tools)
+        grant_approvals(entry, set(req.approved_tools))
 
     if not paused_for_approval:
         return _to_task_response(entry, task_id)
@@ -1758,6 +2632,7 @@ def resume_task(
         entry.pending_approval = None
         if wait:
             _execute_plan(entry, task_id, entry.approved_tools)
+            _record_task_project_log(entry)
         else:
             _start_background_execution(entry, task_id, entry.approved_tools)
         return _to_task_response(entry, task_id)
@@ -1768,6 +2643,7 @@ def resume_task(
     entry.pending_approval = None
     if wait:
         _execute_plan(entry, task_id, entry.approved_tools)
+        _record_task_project_log(entry)
     else:
         _start_background_execution(entry, task_id, entry.approved_tools)
     return _to_task_response(entry, task_id)
@@ -1778,7 +2654,12 @@ def abort_task(
     task_id: str,
     store: InMemoryTaskStore = Depends(get_store),
 ) -> TaskResponse:
-    """用户放弃 → 状态转 FAILED。"""
+    """用户放弃 → 状态转 FAILED。
+
+    **必须一并清掉 ``pending_approval``**：任务是终态了，那份「待放行」清单已经没有意义，
+    留着会让任务列表挂一个永远点不了的标记（实测 2026-10-11，用户真实任务
+    「你现在仔帮我这个agent写一个前端」就是 failed + 待放行）。
+    """
     entry = store.get(task_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
@@ -1786,6 +2667,9 @@ def abort_task(
         entry.conductor.handle_abort()  # → FAILED
     except AgentError as exc:
         raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+    entry.pending_approval = None
+    # 「放弃」也是一次发生过的项目活动，要记账（噪声过滤在读取侧做，见 build_project_context）。
+    _record_task_project_log(entry)
     return _to_task_response(entry, task_id)
 
 

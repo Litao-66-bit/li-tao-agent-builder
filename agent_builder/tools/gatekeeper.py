@@ -32,6 +32,21 @@ current_workspace_dir: contextvars.ContextVar[Path | None] = contextvars.Context
 # 工作区内可写临时目录的名字（隐藏目录：不进产物树、不进 lint、不进 git）。
 WORKSPACE_TEMP_DIRNAME = ".agent-tmp"
 
+#: 需要走**路径沙箱校验**的文件类工具（新增工具按需加入，不改已有校验逻辑）。
+#: 单独提成常量是为了让门卫与调用方共用同一个清单，避免"两处各写一份"而漂移。
+FILE_SANDBOX_TOOLS: tuple[str, ...] = (
+    "file_write",
+    "file_delete",
+    "file_read",
+    "file_edit",
+    "file_list",
+    "code_search",
+    "data_query",
+    "git_commit",
+    "rollback",
+    "git_log",
+)
+
 
 def workspace_temp_dir() -> Path:
     """当前工作区内的可写临时目录（不存在则创建）。"""
@@ -98,6 +113,36 @@ def resolve_in_workspace(path: str | Path, base: Path | None = None) -> Path:
     return candidate.resolve()
 
 
+def workspace_path(step_args: Any) -> str | None:
+    """从工具入参里取"要落到哪个路径"（文件类工具统一口径）。
+
+    ``file_write`` / ``file_edit`` / ``file_read`` / ``file_delete`` / ``file_list`` 用 ``path``，
+    而 ``git_commit`` / ``rollback`` / ``git_log`` 用 ``repo_path`` —— 与
+    :meth:`ToolGatekeeper._check_sandbox_path` 的取值顺序**完全一致**，因此"是不是越界写"
+    在门卫与调用方之间只有一个口径（不另写一套判断）。
+    """
+    args = step_args if isinstance(step_args, dict) else {}
+    raw = args.get("path") or args.get("repo_path") or ""
+    text = str(raw).strip()
+    return text or None
+
+
+def inside_workspace(path: str | Path, base: Path | None = None) -> bool:
+    """路径解析后是否落在**工作区**内（与门卫沙箱校验同一实现，不另写一套）。
+
+    这是卡 44 的安全边界：``file_write`` / ``file_edit`` **在工作区内**不算高危动作
+    （产出文件是本职工作，不再逐次打断用户要放行）；**越界**则仍由门卫
+    :meth:`ToolGatekeeper._check_sandbox_path` 以 ``E_PERMISSION`` 硬拒绝。
+    """
+    root = Path(base) if base is not None else (current_workspace_dir.get() or Path.cwd())
+    root = root.resolve()
+    try:
+        resolve_in_workspace(path, root).relative_to(root)
+    except (ValueError, OSError):
+        return False
+    return True
+
+
 @dataclass(slots=True)
 class ToolAudit:
     """一次工具调用的门卫审计记录。"""
@@ -146,6 +191,15 @@ class ToolGatekeeper:
                 correlation_id=self.correlation_id,
             )
 
+        # 文件类工具：沙箱路径校验（新增工具按需加入元组，不改已有校验逻辑）。
+        #
+        # ⚠️ 顺序有意义（卡 44）：**越界判定必须排在审批门之前**。工作区外的写是
+        # **不可放行**的硬边界（沙箱），不是"等你点一下就行"的审批事项 —— 先判越界，
+        # 越界一律 E_PERMISSION；工作区内的写/改才继续往下走，而它们已在权限矩阵里
+        # 不再属高风险（见 permissions.WORKSPACE_SCOPED_WRITE_TOOLS），因此不再打断用户。
+        if tool_call.tool in FILE_SANDBOX_TOOLS:
+            self._check_sandbox_path(tool_call)
+
         # 高风险工具：审批门（contracts/schemas.Approval.required）。
         if perm.is_high_risk(tool_call.tool) and not tool_call.is_approved():
             self._reject(tool_call, "高风险工具缺少审批")
@@ -154,10 +208,6 @@ class ToolGatekeeper:
                 source="tool_gatekeeper",
                 correlation_id=self.correlation_id,
             )
-
-        # 文件类工具：沙箱路径校验（新增工具按需加入元组，不改已有校验逻辑）。
-        if tool_call.tool in ("file_write", "file_delete", "file_read", "file_edit", "file_list", "code_search", "data_query", "git_commit", "rollback", "git_log"):
-            self._check_sandbox_path(tool_call)
 
         # sandbox_run：可选 path 校验（path 存在则校验沙箱，不存在则跳过）。
         if tool_call.tool == "sandbox_run":
@@ -188,7 +238,7 @@ class ToolGatekeeper:
     # ── 内部校验 ─────────────────────────────────────────────────
 
     def _check_sandbox_path(self, tool_call: ToolCall) -> None:
-        path_str = str(tool_call.args.get("path") or tool_call.args.get("repo_path") or "")
+        path_str = workspace_path(tool_call.args) or ""
         if not path_str:
             # 参数缺失 = E_VALIDATION，不是权限问题。
             # 此前报 E_PERMISSION，把「模型忘了给参数」说成「没权限」—— 实测中模型因此
@@ -316,11 +366,14 @@ class ToolGatekeeper:
 
 
 __all__ = [
+    "FILE_SANDBOX_TOOLS",
     "OUTPUT_ROOT_DIRNAME",
     "WORKSPACE_DIR",
     "ToolAudit",
     "ToolGatekeeper",
     "current_workspace_dir",
+    "inside_workspace",
     "output_root",
     "resolve_in_workspace",
+    "workspace_path",
 ]

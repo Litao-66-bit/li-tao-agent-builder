@@ -291,11 +291,19 @@ class TestCodeWorkerPermissions:
             "audit_log",
         }
 
-    def test_file_write_is_high_risk(self):
-        """file_write / file_edit 是高风险工具（需审批）。"""
+    def test_file_write_is_not_approval_gated(self):
+        """file_write / file_edit **不进**审批门（卡 44）。
+
+        工作区内写/改是 code_worker 的本职产出，边界由门卫路径沙箱硬拒绝
+        （越界一律 E_PERMISSION）。把它们挂进 high_risk_tools 会让"写一个文件"
+        每次都要用户点放行 —— 实测用户报"它并不能去修改文件"就是这个原因。
+        保护意图没被削弱：越界写仍不可执行，见 test_workspace_boundary 的用例。
+        """
         perm = DEFAULT_ROLE_PERMS["code_worker"]
-        assert "file_write" in perm.high_risk_tools
-        assert "file_edit" in perm.high_risk_tools
+        assert "file_write" in perm.allowed_tools
+        assert "file_edit" in perm.allowed_tools
+        assert "file_write" not in perm.high_risk_tools
+        assert "file_edit" not in perm.high_risk_tools
 
     def test_no_unauthorized_tools(self):
         """code_worker 无网络/提交/回滚工具。"""

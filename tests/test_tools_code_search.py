@@ -320,8 +320,11 @@ class TestCodeSearchCost:
                 gatekeeper, _make_call("operator", workspace, "x", max_results=10)
             )
         lines = call.result.split("\n")
-        # 应只有 10 条 + 1 条截断提示
-        assert len(lines) == 11
+        # 卡 48：**命中条数放在第一行**（观察窗口只保头部，写在末尾会被裁掉）。
+        assert lines[0].startswith("命中 ")
+        assert "如需更多请缩小 pattern" in lines[0]
+        # 10 条匹配 + 1 条截断提示 + 1 行头部
+        assert len(lines) == 12
         assert "已截断" in lines[-1]
 
 

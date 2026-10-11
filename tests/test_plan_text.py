@@ -131,3 +131,20 @@ class TestPlanTextThroughApi:
 
         assert resp.status_code == 200, "计划文本失败不能拖垮 /plan"
         assert resp.json()["plan_text"] == ""
+
+
+class Test交付形态进规划:
+    """卡 39：规划必须写明**交付形态与入口**。
+
+    实测（2026-10-11）：用户要「给我做一个 agent」，计划只产出 `src/agent.py` + `main.py`
+    + `requirements.txt`，**没有任何前端** —— 需求里的"给我用"没被翻译成交付形态。
+    """
+
+    def test_提示词要求写明交付形态与入口(self):
+        from agent_builder.api.routes import _PLAN_TEXT_PROMPT
+
+        assert "交付形态" in _PLAN_TEXT_PROMPT
+        assert "入口" in _PLAN_TEXT_PROMPT
+        assert "CLI" in _PLAN_TEXT_PROMPT and "Web" in _PLAN_TEXT_PROMPT
+        # 拿不准要问，而不是默认只做后端
+        assert "待确认" in _PLAN_TEXT_PROMPT

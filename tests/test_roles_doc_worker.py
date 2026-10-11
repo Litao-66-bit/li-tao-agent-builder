@@ -191,10 +191,17 @@ class TestDocWorkerPermissions:
             "audit_log",
         }
 
-    def test_file_write_is_high_risk(self):
+    def test_file_write_is_not_approval_gated(self):
+        """file_write / file_edit **不进**审批门（卡 44）。
+
+        工作区内写/改是 doc_worker 的本职产出，边界由门卫路径沙箱硬拒绝
+        （越界一律 E_PERMISSION）；挂进 high_risk_tools 会让每次写文件都要用户点放行。
+        """
         perm = DEFAULT_ROLE_PERMS["doc_worker"]
-        assert "file_write" in perm.high_risk_tools
-        assert "file_edit" in perm.high_risk_tools
+        assert "file_write" in perm.allowed_tools
+        assert "file_edit" in perm.allowed_tools
+        assert "file_write" not in perm.high_risk_tools
+        assert "file_edit" not in perm.high_risk_tools
 
     def test_no_unauthorized_tools(self):
         """doc_worker 无代码/提交/回滚工具。"""

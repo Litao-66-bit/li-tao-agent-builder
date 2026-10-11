@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from agent_builder.api.orchestrator import ACTION_ROLE_MAP
-from agent_builder.tools.permissions import DEFAULT_ROLE_PERMS
+from agent_builder.tools.permissions import DEFAULT_ROLE_PERMS, tools_of_capabilities
 from agent_builder.tools.registry import registry
 
 # ── 架构分类（取值）──────────────────────────────────────────────
@@ -268,26 +268,66 @@ def _accepts_by_role() -> dict[str, frozenset[str]]:
     return {role: frozenset(actions) for role, actions in mapping.items()}
 
 
-def build_catalog(*, sub_arch: bool) -> tuple[RoleSpec, ...]:
+def build_catalog(
+    *, sub_arch: bool, capabilities: set[str] | frozenset[str] | None = None
+) -> tuple[RoleSpec, ...]:
     """构造能力目录（按角色名排序，保证同输入同输出）。
 
     Args:
         sub_arch: 副结构开关；False 时目录里不含副架构角色。
+        capabilities: **任务级能力开关**（卡 45）。None = 全部启用（既有行为）。
+            传了集合时，目录里**只留下该组里的动作** —— 否则关掉"联网搜索"之后模型
+            还看得见 `web_search`，调了才失败（用户看到的就是"开关没用"）。
+            角色的动作被滤空时该角色**不进目录**（不放一个什么都不能做的角色进去）。
     """
     accepts = _accepts_by_role()
     specs: list[RoleSpec] = []
     for role in sorted(selectable_roles(sub_arch=sub_arch)):
         perm = DEFAULT_ROLE_PERMS.get(role)
+        actions = accepts.get(role, frozenset())
+        if capabilities is not None:
+            actions = _narrow_actions(role, actions, capabilities)
+            if not actions:
+                continue
         specs.append(
             RoleSpec(
                 name=role,
                 architecture=architecture_of(role) or PERMISSION,
                 mission=ROLE_MISSIONS.get(role, "（未登记能力描述）"),
-                accepts=accepts.get(role, frozenset()),
+                accepts=actions,
                 high_risk_tools=frozenset(perm.high_risk_tools) if perm else frozenset(),
             )
         )
     return tuple(specs)
+
+
+def _narrow_actions(
+    role: str, actions: frozenset[str], capabilities: set[str] | frozenset[str]
+) -> frozenset[str]:
+    """按能力开关收窄某个角色的可承接动作。
+
+    口径与执行侧（``permissions.filter_role_perms``）**同源**：
+
+    - **注册工具**：被关掉的组里的工具一律剔除；
+    - **角色内行为**（``summarize`` / ``propose`` / ``report`` / ``impact_analyze`` …）：
+      不是工具、不属任何能力组，**保留** —— 它们不增加对外能力（关"联网搜索"不该
+      顺带让模型不能总结）。
+    - **权限层身份**（``operator``）：按权限矩阵的 ``allowed_tools`` 与豁免表判定，
+      不用 ``ACTION_ROLE_MAP`` 的动作集合。
+    """
+    perm = DEFAULT_ROLE_PERMS.get(role)
+    allowed = (
+        tools_of_capabilities(capabilities, all_tools=set(perm.allowed_tools))
+        if perm is not None
+        else set()
+    )
+    kept: set[str] = set()
+    for action in actions:
+        if registry.get(action) is None:
+            kept.add(action)  # 角色内行为：保留
+        elif action in allowed:
+            kept.add(action)
+    return frozenset(kept)
 
 
 def catalog_prompt(*, sub_arch: bool, specs: Sequence[RoleSpec] | None = None) -> str:

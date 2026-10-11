@@ -9,7 +9,7 @@
 <link rel="icon" href="data:,">
 <!-- 静态资源版本号（?v=）：改前端资源后请同步 bump 这里的版本号（如 20261008），
      否则浏览器会复用旧缓存（python -m http.server 不发 Cache-Control）。 -->
-<link rel="stylesheet" href="styles.css?v=20261011b">
+<link rel="stylesheet" href="styles.css?v=20261011j">
 </head>
 <body>
 
@@ -65,46 +65,28 @@
           <div class="panel-title">🗂 任务</div>
           <button type="button" class="new-task-btn" id="newTaskBtn">
             <span class="new-task-big">＋ 新任务</span>
-            <span class="new-task-sub">终止当前任务并清空工作区</span>
+            <span class="new-task-sub">保留当前任务，另开一个（不带上文）</span>
           </button>
           <div class="task-list" id="taskList">
             <div class="task-empty">加载中…</div>
           </div>
         </div>
 
+        <!-- 技能 / 插件：每一项都由后端 GET /capabilities 动态渲染
+             （不再有"尚未接入后端"的写死开关，也不再有假插件条目）。 -->
         <div class="panel">
           <div class="panel-title">🔧 技能</div>
-          <div class="panel-hint">尚未接入后端，仅作展示</div>
-          <div class="skill-row">
-            <span class="skill-label">文件读写</span>
-            <label class="toggle" title="技能开关尚未接入后端，仅作展示">
-              <input type="checkbox" aria-label="文件读写" checked>
-              <span class="toggle-track"></span>
-            </label>
+          <div class="skill-list" id="skillList">
+            <div class="panel-hint">能力清单加载中…</div>
           </div>
-          <div class="skill-row">
-            <span class="skill-label">联网搜索</span>
-            <label class="toggle" title="技能开关尚未接入后端，仅作展示">
-              <input type="checkbox" aria-label="联网搜索">
-              <span class="toggle-track"></span>
-            </label>
-          </div>
-          <div class="skill-row">
-            <span class="skill-label">命令执行 <span class="warn-badge" title="高风险操作，需审批">⚠</span></span>
-            <label class="toggle" title="技能开关尚未接入后端，仅作展示">
-              <input type="checkbox" aria-label="命令执行">
-              <span class="toggle-track"></span>
-            </label>
-          </div>
+          <div class="panel-hint" id="skillHint"></div>
         </div>
 
         <div class="panel">
           <div class="panel-title">🧩 插件</div>
-          <div class="plugin-item">· 海报生成</div>
-          <div class="plugin-item">· 网页抓取</div>
-          <div class="plugin-item">· Git 集成</div>
-          <!-- 交互一律原生 <button>：键盘可达、读屏语义都由原生元素提供 -->
-          <button type="button" class="plugin-add" title="插件系统尚未接入后端">＋ 添加插件</button>
+          <div id="pluginList">
+            <div class="panel-hint">插件清单加载中…</div>
+          </div>
         </div>
 
         <!-- 最近项目：点击切换工作区（数据来自后端 /projects） -->
@@ -268,10 +250,10 @@
         <button type="button" class="key-btn" id="apiKeyRotate" title="用新密钥替换当前密钥（不中断服务）">轮换</button>
         <button type="button" class="key-btn key-btn-danger" id="apiKeyDelete">删除密钥</button>
       </div>
-      <div class="setting-chip">
+      <div class="setting-chip" title="把大模型与工作流拆开：勾上后只跟模型对话，不建任务、不规划、不执行、不审批">
         <label class="toggle">
-          <!-- 默认开启：本产品的核心是 LLM 拆分需求；关闭时不会产出步骤（会落到「暂无可用计划」卡片） -->
-          <input type="checkbox" id="llmToggle" aria-label="LLM 拆分" checked>
+          <!-- **默认不勾**：勾上会让所有人只剩对话、丢掉工作流；它是一条旁路，不该是默认。 -->
+          <input type="checkbox" id="llmToggle" aria-label="LLM 拆分">
           <span class="toggle-track"></span>
         </label>
         LLM 拆分
@@ -308,6 +290,19 @@
          绿色开关只说明"已开"；开着会发生什么由这一行负责说清。 -->
     <p class="sub-arch-hint" id="subArchHint" role="status" aria-live="polite" hidden></p>
 
+    <!-- 生效情况提示（卡 46b）：把后端回传的「本次实际生效的选项」如实显示出来 ——
+         不适用的选项会被置灰并说明原因，用户不用再猜这些开关有没有用。 -->
+    <p class="effective-hint" id="effectiveHint" role="status" aria-live="polite" hidden></p>
+
+    <!-- 继续改 / 另起新任务（卡 50）：任务跑完后，输入框默认是「继续改这个任务」——
+         以前再发一句会被当成新需求**另建任务**，模型于是从零重做（用户原话"没法改"）。 -->
+    <div class="continue-row" id="continueRow" role="status" aria-live="polite" hidden>
+      <span class="continue-hint" id="continueHint"></span>
+      <button type="button" class="continue-new" id="newTaskInstead" title="不接着改，另起一个新任务">
+        另起新任务
+      </button>
+    </div>
+
     <div class="input-row">
       <!-- 多行输入：Enter 发送 / Shift+Enter 换行（与占位文案一致） -->
       <textarea class="msg-input" id="msgInput" rows="1" aria-label="需求输入"
@@ -331,8 +326,8 @@
   </div>
 
   <!-- 先加载 API 封装层，再加载业务逻辑（版本号与上方 styles.css 保持一致） -->
-  <script src="js/api.js?v=20261011b"></script>
-  <script src="js/app.js?v=20261011b"></script>
+  <script src="js/api.js?v=20261011j"></script>
+  <script src="js/app.js?v=20261011j"></script>
 
 </body>
 </html>

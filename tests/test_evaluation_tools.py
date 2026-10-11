@@ -26,6 +26,7 @@ from agent_builder.evaluation.tool_report import (
     render_markdown,
 )
 from agent_builder.tools import registry
+from agent_builder.tools.permissions import WORKSPACE_SCOPED_WRITE_TOOLS
 from agent_builder.tools.spec import VALID_COST_BANDS, VALID_RISK_LEVELS, ToolSpec
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -128,9 +129,19 @@ class TestRiskGrading:
 
     @pytest.mark.parametrize("tool", sorted(MUTATING_TOOLS))
     def test_写类工具非low且进审批门(self, tool: str) -> None:
+        """写类工具一律不得为 low；**是否进审批门**按口径分两类（卡 44）。
+
+        - 不可逆 / 跨版本边界（删除 / 提交 / 回滚）→ 必须进审批门；
+        - 工作区边界类（file_write / file_edit）→ 必须**不进**审批门，越界由门卫沙箱硬拒。
+        """
         spec = _spec(tool)
         assert spec.risk_level != "low", f"{tool} 是写/提交/回滚类，不能标为 low"
-        assert tool in _approval_gated_tools(), f"{tool} 必须列入某角色的 high_risk_tools"
+        if tool in WORKSPACE_SCOPED_WRITE_TOOLS:
+            assert tool not in _approval_gated_tools(), (
+                f"{tool} 不该进审批门（工作区内写是本职产出，越界由路径沙箱硬拒）"
+            )
+        else:
+            assert tool in _approval_gated_tools(), f"{tool} 必须列入某角色的 high_risk_tools"
 
     @pytest.mark.parametrize("tool", TOOL_NAMES)
     def test_高风险工具必须进审批门(self, tool: str) -> None:

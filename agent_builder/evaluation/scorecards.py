@@ -31,7 +31,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from agent_builder.tools.permissions import DEFAULT_ROLE_PERMS
+from agent_builder.tools.permissions import (
+    APPROVAL_GATED_WRITE_TOOLS,
+    DEFAULT_ROLE_PERMS,
+    WORKSPACE_SCOPED_WRITE_TOOLS,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DOC_PROTOCOLS = _PROJECT_ROOT / "docs" / "execution-protocols.md"
@@ -45,9 +49,14 @@ FORBIDDEN_TOOL_MAP: tuple[tuple[str, str], ...] = (
     ("执行命令", "sandbox_run"),
 )
 
-# 高风险写类工具：授权即可写者必须挂审批门。
-# （RolePerm 只保证 high_risk_tools ⊆ allowed_tools，反向不保证。）
-WRITE_TOOLS = frozenset({"file_write", "git_commit", "rollback"})
+# 写盘类工具（含删除）：用于判断角色是不是只读角色。
+WRITE_TOOLS = frozenset({"file_write", "file_edit", "file_delete", "git_commit", "rollback"})
+
+# 「授权即可写者必须挂审批门」只适用于**不可逆 / 跨版本边界**的那几个写类工具
+# （删除 / 提交 / 回滚）。工作区边界类写工具（file_write / file_edit）自卡 44 起
+# 刻意**不进**审批门：它们在**工作区内**是本职产出，边界由门卫路径沙箱硬拒绝；
+# 挂上审批门就等于让用户每写一个文件都点一次放行（实测用户报"它并不能去修改文件"）。
+# （APPROVAL_GATED_WRITE_TOOLS / WORKSPACE_SCOPED_WRITE_TOOLS 由 permissions 导入。）
 
 # 跨层依赖：角色不应直接依赖这些层。
 LAYER_VIOLATIONS = ("agent_builder.api", "agent_builder.tools", "agent_builder.llm")
@@ -283,10 +292,24 @@ def _score_permissions(role: str, doc: DocRole | None, granted: tuple[str, ...])
                 flags.append(f"权限过宽：边界声明禁止「{keyword}」，但仍实授 `{tool}`")
     write_granted = sorted(WRITE_TOOLS & set(granted))
     gated = set(_high_risk_tools(role))
-    ungated_write = [tool for tool in write_granted if tool not in gated]
+    # 不可逆 / 跨版本边界的写类：必须挂审批门。
+    ungated_write = [
+        tool for tool in write_granted if tool in APPROVAL_GATED_WRITE_TOOLS and tool not in gated
+    ]
     if ungated_write:
         score -= 3
         flags.append(f"审批门缺失：实授写类工具 {ungated_write} 却未列入 high_risk_tools")
+    # 工作区边界类写工具：**不该**挂审批门（挂了就是让用户每写一个文件点一次放行），
+    # 但仍必须是沙箱校验名单里的工具 —— 越界由门卫硬拒，这条安全边界不能少。
+    gated_workspace_writes = [
+        tool for tool in write_granted if tool in WORKSPACE_SCOPED_WRITE_TOOLS and tool in gated
+    ]
+    if gated_workspace_writes:
+        score -= 3
+        flags.append(
+            f"审批门过宽：工作区边界类写工具 {gated_workspace_writes} 仍在 high_risk_tools"
+            "（产出文件会每次都停下来等放行）"
+        )
     granted_set = set(granted)
     if not (granted_set & WRITE_TOOLS):
         notes.append("只读角色，无写类工具")

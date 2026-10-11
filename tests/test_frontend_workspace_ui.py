@@ -402,15 +402,20 @@ class TestDesktopChromeIA:
     def test_非原生按钮的role_button已清零(self) -> None:
         """约束：交互一律原生 <button> —— div/span + role=button 的 ARIA 变通不得存在。
 
-        文件树行与「＋ 添加插件」此前是 ``div role=button`` + keydown 兜底，现已换回原生元素。
+        文件树行此前是 ``div role=button`` + keydown 兜底，现已换回原生元素。
+        插件区的「＋ 添加插件」**已按卡 45 删除**（后端没有插件系统，那个按钮是假的），
+        所以这里改成钉住"插件区不再有假条目"，保护意图不变。
         """
         source = _read("frontend/js/app.js")
         html = _read("frontend/index.html")
         assert "setAttribute('role', 'button')" not in source
         assert 'role="button"' not in html
-        # 文件树行与「添加插件」都已是原生 <button>（键盘/读屏语义由原生元素自带）。
+        # 文件树行已是原生 <button>（键盘/读屏语义由原生元素自带）。
         assert "document.createElement('button')" in _function_body(source, "renderFileTree")
-        assert '<button type="button" class="plugin-add"' in html
+        # 卡 45：插件区不再画假条目；清单由后端 /capabilities 下发（当前恒为空 + 说明）。
+        assert '<button type="button" class="plugin-add"' not in html
+        assert "海报生成" not in html
+        assert 'id="pluginList"' in html
 
 
 class TestNoDanglingElementIds:
@@ -871,7 +876,8 @@ class TestChatFirst:
         # 建任务已抽成 runRequirementAsTask（与「重新生成」共用同一条链路），
         # 所以这里比的是它的**调用点**，并额外钉住建任务确实只在那条链路里发生。
         assert body.index("api.chat(") < body.index("runRequirementAsTask(")
-        assert "api.createTask(requirement)" in _function_body(source, "runRequirementAsTask")
+        # 建任务**只**在 runRequirementAsTask 里发生（现在会带上续接用的 opts）。
+        assert "api.createTask(requirement, {" in _function_body(source, "runRequirementAsTask")
 
     def test_上下文只取纯文本消息(self) -> None:
         body = _function_body(_read("frontend/js/app.js"), "recentChatHistory")
@@ -1611,3 +1617,328 @@ class TestSaveLocationWiring:
         save_body = _function_body(app, "handleViewerSave")
         assert "absoluteWorkspacePath(" in save_body
         assert "已保存到" in save_body
+
+
+class TestArtifactPanelFreshness:
+    """卡 38：产物面板要**跟着磁盘走**（保存后、任务结束后立刻更新）。
+
+    实测（2026-10-11）：`loadFileTree()` 原先只有 3 个调用点（菜单 ↻ / 切项目 / 首次加载），
+    保存文件后字节数是旧的、任务跑完新产物也不出现 —— 用户报的"延迟"就是这个。
+    """
+
+    def test_保存成功后刷新产物树(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "handleViewerSave")
+
+        assert "loadFileTree()" in body
+
+    def test_任务收尾刷新产物树(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "applyRunResult")
+
+        assert "loadFileTree()" in body
+
+    def test_轮询期间有新产物也刷新(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "startTaskRunPoller")
+
+        assert "artifactSignature(" in body
+        assert "loadFileTree()" in body
+
+    def test_产物签名只看集合(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "artifactSignature")
+
+        assert "loop_state" in body
+        assert "execution_results" in body
+        # 顺序无关：先排序再拼，避免同集合不同顺序被当成"变了"
+        assert ".sort()" in body
+
+
+class TestContinuationWiring:
+    """卡 36：前端要**自动带上**上一个任务的上文，并让用户看得见。"""
+
+    def test_有组装上文的助手(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "buildContinuationContext")
+
+        assert "api.getTask(" in body
+        assert "task.conclusion" in body
+        assert "lastUserRequirement()" in body
+        # 还在跑的任务不当作"已完成的上文"
+        assert "task.running" in body
+
+    def test_发送时带上下文(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "handleSend")
+
+        assert "buildContinuationContext(" in body
+        assert "contextNote" in body
+
+    def test_建任务请求带上context(self) -> None:
+        app = _read("frontend/js/app.js")
+        api = _read("frontend/js/api.js")
+
+        assert "context: (options && options.contextNote)" in app
+        assert "context: opts.context" in api
+        assert "parent_task_id" in api
+
+    def test_用户看得见带上了上文(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "runRequirementAsTask")
+
+        assert "已带上本项目的历史上下文" in body
+
+
+class TestLlmSplitDirectWiring:
+    """卡 46：「LLM 拆分」= 把大模型与工作流**拆开**（直连模式）。
+
+    它不是"是否用 LLM 规划"，也不是给工作流打补丁 —— 直连是**旁路**：
+    不建任务、不规划、不执行、不审批。
+    """
+
+    def test_开关默认关闭且语义写清(self) -> None:
+        html = _read("frontend/index.html")
+
+        assert 'id="llmToggle"' in html
+        # 默认勾选会让所有人只剩对话、丢掉工作流 —— 必须不勾
+        assert 'id="llmToggle" aria-label="LLM 拆分" checked' not in html
+        assert "把大模型与工作流拆开" in html
+
+    def test_发送时按开关分流(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "handleSend")
+
+        assert "isLlmSplitOn()" in body
+        assert body.index("isLlmSplitOn()") < body.index("api.chat(")
+
+    def test_直连不建任务不规划(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "handleDirectChat")
+
+        assert "api.directChat(" in body
+        assert "createTask" not in body
+        assert "planTask" not in body
+
+    def test_直连端点独立且带本机标识(self) -> None:
+        api = _read("frontend/js/api.js")
+
+        assert "'/llm/chat'" in api
+
+    def test_模式只写sessionStorage(self) -> None:
+        src = _read("frontend/js/app.js")
+
+        assert "sessionStorage.setItem(LLM_SPLIT_KEY" in src
+        # 只钉"这个模式的键不落 localStorage"，不是全文不许出现这个词
+        assert "localStorage.setItem(LLM_SPLIT_KEY" not in src
+        assert "localStorage.getItem(LLM_SPLIT_KEY" not in src
+
+    def test_工作流模式仍然用模型规划(self) -> None:
+        """不许因为改开关而把规划降级成规则式 —— 灵活性不能少。"""
+        src = _read("frontend/js/app.js")
+
+        assert "const useLLM = true;" in src
+
+
+class TestBudgetContinueWiring:
+    """预算用满后**由用户决定**要不要再来一轮（不许直接判死）。"""
+
+    def test_调的是继续端点(self) -> None:
+        api = _read("frontend/js/api.js")
+
+        assert "/continue`" in api
+        assert "continueTask" in api
+
+    def test_预算停下时给继续按钮(self) -> None:
+        src = _read("frontend/js/app.js")
+        body = _function_body(src, "buildStopCard")
+
+        assert "isBudgetStop(task)" in body
+        assert "🔄 继续再跑一轮" in body
+        assert "handleContinueTask" in body
+
+    def test_空转停下不给继续按钮(self) -> None:
+        """空转 / 决策不可解析是"模型没招了"，多给预算只是烧钱 —— 不许给按了没用的按钮。"""
+        src = _read("frontend/js/app.js")
+        budget = _read("frontend/js/app.js")
+        body = _function_body(src, "buildStopCard")
+
+        # 只有 retryable 分支才渲染继续按钮
+        assert "${retryable ?" in body
+        # 判定只认这两种预算原因
+        assert "budget_steps" in budget
+        assert "budget_tokens" in budget
+        assert "stagnant" not in _function_body(src, "isBudgetStop")
+
+    def test_预算进度如实显示(self) -> None:
+        src = _read("frontend/js/app.js")
+        body = _function_body(src, "budgetProgressText")
+
+        assert "steps_used" in body
+        assert "max_steps" in body
+        assert "tokens_used" in body
+
+    def test_applyRunResult调用签名正确(self) -> None:
+        """回归：`applyRunResult` **只接任务对象**。
+
+        `/instruct` 与 `/continue` 第一版都写成 `applyRunResult(taskId, result)` ——
+        于是函数拿到的是一个字符串，`task.task_id` 变 undefined，界面不刷新（实测踩到）。
+        """
+        src = _read("frontend/js/app.js")
+
+        assert "applyRunResult(taskId, result)" not in src
+        assert "function applyRunResult(task)" in src
+        # 两条新链路都必须用正确签名
+        assert "applyRunResult(result);" in _function_body(src, "handleContinueTask")
+        assert "applyRunResult(result);" in _function_body(src, "sendFollowUp")
+
+    def test_继续失败时把按钮放回去(self) -> None:
+        src = _read("frontend/js/app.js")
+        body = _function_body(src, "handleContinueTask")
+
+        assert "catch" in body
+        assert "disabled = false" in body
+
+
+class TestFollowUpInstructWiring:
+    """卡 50：任务结束后输入框默认"继续改这个任务"，并给"另起新任务"出口。"""
+
+    def test_调的是追加指令而不是新建任务(self) -> None:
+        api = _read("frontend/js/api.js")
+
+        # 模板字符串可能被换行断开，所以只钉住端点与任务 ID 插值两段事实。
+        assert "/instruct`" in api
+        assert "instructTask" in api
+        assert "${id}" in api
+
+    def test_发送前先判断继续改(self) -> None:
+        src = _read("frontend/js/app.js")
+        body = _function_body(src, "handleSend")
+
+        assert "continueModeFor()" in body
+        assert "sendFollowUp(" in body
+        # 判定必须早于"建任务"那条链路
+        assert body.index("continueModeFor()") < body.index("runRequirementAsTask(")
+
+    def test_追加修改不建任务(self) -> None:
+        src = _read("frontend/js/app.js")
+        body = _function_body(src, "sendFollowUp")
+
+        assert "api.instructTask(" in body
+        assert "createTask" not in body
+        assert "planTask" not in body
+
+    def test_有另起新任务的出口(self) -> None:
+        html = _read("frontend/index.html")
+        src = _read("frontend/js/app.js")
+
+        assert 'id="newTaskInstead"' in html
+        assert 'id="continueRow"' in html
+        assert "requestNewTaskInstead" in src
+        # 一次性意图：用完必须复位，否则后面永远不接着改
+        assert "forceNewTask = false" in src
+
+    def test_可继续改的状态与后端一致(self) -> None:
+        """verifying / interrupted 可以；executing 与终态不行（与 /instruct 的 409 口径对齐）。"""
+        body = _function_body(_read("frontend/js/app.js"), "refreshFollowUpEligibility")
+
+        assert "'verifying'" in body
+        assert "'interrupted'" in body
+        assert "'delivered'" not in body  # 终态不该被判成可继续
+
+    def test_继续改提示是原生按钮(self) -> None:
+        html = _read("frontend/index.html")
+
+        assert '<button type="button" class="continue-new"' in html
+        assert 'role="button"' not in html
+
+
+class TestEffectiveOptionsWiring:
+    """卡 46b：界面必须如实标注生效情况，不许让用户猜开关有没有用。"""
+
+    def test_生效提示容器存在(self) -> None:
+        html = _read("frontend/index.html")
+
+        assert 'id="effectiveHint"' in html
+        assert 'role="status"' in html  # 播报但不打断操作
+
+    def test_不适用的选项被置灰(self) -> None:
+        src = _read("frontend/js/app.js")
+        body = _function_body(src, "applyEffectiveOptions")
+
+        assert "is-na" in body
+        assert "item.applied" in body
+        # 不适用 ≠ 禁用：只降视觉权重（disabled 会让用户以为功能坏了）
+        assert ".disabled = true" not in body
+
+    def test_计划响应会触发标注(self) -> None:
+        src = _read("frontend/js/app.js")
+        body = _function_body(src, "applyPlanResult")
+
+        assert "applyEffectiveOptions(result.effective_options)" in body
+
+    def test_切任务时清掉上一个任务的标注(self) -> None:
+        src = _read("frontend/js/app.js")
+
+        assert "function clearEffectiveOptions" in src
+        assert "clearEffectiveOptions()" in _function_body(src, "applyEffectiveOptions")
+
+    def test_置灰样式只用token(self) -> None:
+        css = _read("frontend/styles.css")
+        start = css.index(".setting-chip.is-na")
+        block = css[start : start + 200]
+
+        assert "opacity" in block
+        assert "#" not in block  # 规则体里不得出现颜色字面量（约束：颜色只写 token）
+
+
+class TestCapabilityPanelWiring:
+    """卡 45：左栏「技能 / 插件」面板必须由后端清单驱动，不许再写死。"""
+    """卡 45：左栏「技能 / 插件」面板必须由后端清单驱动，不许再写死。"""
+
+    def test_面板容器存在且旧假开关已删除(self) -> None:
+        html = _read("frontend/index.html")
+
+        assert 'id="skillList"' in html
+        assert 'id="pluginList"' in html
+        assert 'id="skillHint"' in html
+        # 旧的三条硬编码技能与"尚未接入后端，仅作展示"必须消失。
+        # （注释里提到这句话是说明来龙去脉，所以只钉**元素文案**：panel-hint 里不得再出现它。）
+        assert '<div class="panel-hint">尚未接入后端' not in html
+        assert 'aria-label="文件读写"' not in html
+        assert 'aria-label="联网搜索"' not in html
+        assert 'aria-label="命令执行"' not in html
+        # 旧的假插件条目与"添加插件"按钮必须消失
+        assert "海报生成" not in html
+        assert "plugin-add" not in html
+
+    def test_清单来自后端端点(self) -> None:
+        api = _read("frontend/js/api.js")
+        src = _read("frontend/js/app.js")
+
+        assert "'/capabilities'" in api
+        assert "getCapabilities" in api
+        assert "api.getCapabilities()" in src
+
+    def test_开关状态随plan下发(self) -> None:
+        src = _read("frontend/js/app.js")
+        body = _function_body(src, "readPlanOptions")
+
+        assert "enabledCapabilities()" in body
+        assert "options.capabilities" in body
+
+    def test_开关只写sessionStorage(self) -> None:
+        src = _read("frontend/js/app.js")
+
+        assert "sessionStorage.setItem(SKILL_CAPS_KEY" in src
+        assert "localStorage.setItem(SKILL_CAPS_KEY" not in src
+        assert "localStorage.getItem(SKILL_CAPS_KEY" not in src
+
+    def test_插件区按后端说明渲染而不是画条目(self) -> None:
+        src = _read("frontend/js/app.js")
+        body = _function_body(src, "renderPlugins")
+
+        assert "plugins_note" not in body  # 说明由调用方传入
+        assert "note" in body
+        # 后端返回空数组时必须走"如实说明"分支
+        assert "!plugins || !plugins.length" in body
+
+    def test_能力面板用的是原生按钮与勾选框(self) -> None:
+        """约束：交互一律原生元素（不许 div + role=button 的 ARIA 变通）。"""
+        src = _read("frontend/js/app.js")
+        body = _function_body(src, "renderCapabilities")
+
+        assert "document.createElement('input')" in body
+        assert "input.type = 'checkbox'" in body
+        assert "role" not in body

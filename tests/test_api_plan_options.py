@@ -229,7 +229,36 @@ class TestPlanOptionsThreaded:
             # 执行形态与副结构门控（P1 新增；未传 mode 时默认 agentic）。
             "mode": "agentic",
             "sub_arch": False,
+            # 任务级能力开关（卡 45）：**没传 = None = 全部启用**（既有行为不变）。
+            "capabilities": None,
+            # 步数预算（没传 = 用默认 20 步）。
+            "max_steps": None,
         }
+
+    def test_能力开关写入任务条目(self, client: TestClient) -> None:
+        """卡 45：``capabilities`` 也要透传到执行阶段（那里才真正生效）。"""
+        from agent_builder.api.deps import get_store
+
+        tid = _create_task(client)
+        resp = client.post(
+            f"/tasks/{tid}/plan",
+            json={"use_llm": False, "capabilities": ["file"]},
+            headers=_LOCAL_HEADERS,
+        )
+        assert resp.status_code == 200, resp.text
+        entry = get_store().get(tid)
+        assert entry is not None
+        assert entry.options["capabilities"] == ["file"]
+
+    def test_未知能力组被拒(self, client: TestClient) -> None:
+        """打错组名必须 422，不能静默忽略（否则又是"开关看着关了其实没关"）。"""
+        tid = _create_task(client)
+        resp = client.post(
+            f"/tasks/{tid}/plan",
+            json={"use_llm": False, "capabilities": ["no_such_group"]},
+            headers=_LOCAL_HEADERS,
+        )
+        assert resp.status_code == 422
 
     def test_未传时的默认选项(self, client: TestClient) -> None:
         from agent_builder.api.deps import get_store

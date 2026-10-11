@@ -1004,6 +1004,57 @@ body {
 }
 .sub-arch-hint[hidden] { display: none; }
 
+/* 生效情况提示（卡 46b）：与副结构提示同款样式，但用于"本次哪些选项真的生效了"。
+   颜色只引 token（约束：JS 不得内联下发颜色）。 */
+.effective-hint {
+  margin: 0 0 8px;
+  padding: 4px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.effective-hint[hidden] { display: none; }
+.effective-hint .is-on { color: var(--text-strong); }
+.effective-hint .is-na { color: var(--text-muted); text-decoration: line-through; }
+
+/* 不适用的选项置灰（卡 46b）：只降视觉权重，开关本身仍可操作 ——
+   因为"这个模式下不适用"不等于"这个开关坏了"，用户切回适用模式后立刻生效。 */
+.setting-chip.is-na {
+  opacity: 0.55;
+}
+.setting-chip.is-na select,
+.setting-chip.is-na input {
+  cursor: help;
+}
+
+/* 「继续改这个任务 / 另起新任务」（卡 50）：与生效提示同款的低调一行。 */
+.continue-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 4px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.continue-row[hidden] { display: none; }
+.continue-new {
+  flex-shrink: 0;
+  font: inherit;
+  color: var(--text-strong);
+  background: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.continue-new:hover { text-decoration: underline; }
+
 .input-row {
   display: flex;
   gap: 8px;

@@ -21,7 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agent_builder.api.app import create_app
-from agent_builder.api.deps import reset_store
+from agent_builder.api.deps import reset_project_store, reset_store
 from agent_builder.api.schemas import API_KEY_STATUS_FIELDS, ApiKeyStatusResponse
 from agent_builder.api.secrets import (
     FINGERPRINT_LEN,
@@ -73,6 +73,37 @@ def _reset_state():
 @pytest.fixture()
 def client() -> TestClient:
     return TestClient(create_app())
+
+
+@pytest.fixture()
+def isolated_workspace(tmp_path, monkeypatch) -> dict:
+    """把「当前工作区」钉到临时目录，让读文件类断言**不再依赖外部状态**。
+
+    为什么需要（实测 2026-10-11）：``client`` 夹具不设项目注册表，于是
+    ``data/projects.json``（gitignore 的运行时文件）里的 ``current`` 会被直接吃进来 ——
+    本机工作区停在 ``D:\\调研agent\\top1`` 时，读 ``pyproject.toml`` 自然是 404
+    （那条用例本来只是想说"带标识头就该放行"）。这不是被测代码的缺陷，是**用例对
+    "默认工作区恰好是仓库根"的隐藏假设**：注册表缺失 / 指向失效目录时才会成立。
+
+    这里改成显式两次调用：注册临时目录 → 切过去，再给一个已知文件。
+    **只隔离来源，不削弱断言**：读得到 / 读不到仍按真实行为判定。
+    """
+    monkeypatch.setenv("AGENT_BUILDER_PROJECTS_FILE", str(tmp_path / "projects.json"))
+    reset_project_store()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    c = TestClient(create_app())
+    created = c.post("/projects", json={"path": str(workspace)}, headers=LOCAL_HEADERS)
+    assert created.status_code == 200, created.text
+    yield {"client": c, "workspace": workspace}
+
+
+@pytest.fixture(autouse=True)
+def _reset_isolated_registry():
+    """用例结束后别把临时注册表残留到别的用例（注册表是进程级单例）。"""
+    yield
+    reset_project_store()
 
 
 class TestCorsBoundary:
@@ -186,9 +217,11 @@ class TestLocalClientHeader:
     def test_利用_无标识头列文件树_阻断(self, client: TestClient) -> None:
         assert client.get("/workspace/files").status_code == 403
 
-    def test_正常路径_带标识头可读工作区文件(self, client: TestClient) -> None:
-        resp = client.get("/workspace/file", params={"path": "pyproject.toml"}, headers=LOCAL_HEADERS)
+    def test_正常路径_带标识头可读工作区文件(self, isolated_workspace) -> None:
+        c = isolated_workspace["client"]
+        resp = c.get("/workspace/file", params={"path": "pyproject.toml"}, headers=LOCAL_HEADERS)
         assert resp.status_code == 200
+        assert "name='x'" in resp.text
 
 
 class TestNoEcho:

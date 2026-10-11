@@ -37,7 +37,7 @@ from agent_builder.roles.searcher import Searcher
 from agent_builder.roles.summarizer import Summarizer
 from agent_builder.roles.test_runner import TestRunner
 from agent_builder.tools.gatekeeper import ToolGatekeeper
-from agent_builder.tools.permissions import get_default_role_perms
+from agent_builder.tools.permissions import filter_role_perms, get_default_role_perms
 from agent_builder.tools.registry import registry
 
 # 最近一次工具调用的**原始返回**（agentic 循环要把它回灌给模型）。
@@ -215,6 +215,7 @@ def build_step_executor(
     llm_client: Any = None,
     role_brief_mode: str | None = None,
     approved_tools: set[str] | None = None,
+    capabilities: set[str] | frozenset[str] | None = None,
 ) -> tuple[Callable[[Step], Any], ToolGatekeeper]:
     """构造「单步执行器 + 工具门卫」——固定工作流与 agentic 循环**共用**这条执行链路。
 
@@ -227,6 +228,10 @@ def build_step_executor(
             未命中的 action 仍走纯工具执行。
         role_brief_mode: 角色简报档位覆盖（``off`` / ``core`` / ``full``）；None 用环境变量。
         approved_tools: 本次显式授权的高风险工具名集合；None / 空集 = 不授权任何高风险工具。
+        capabilities: **任务级能力开关**（卡 45）。None = 全部启用（既有行为）。
+            传了集合时先把该组之外的工具从角色白名单里剔除，再交给门卫 ——
+            于是关掉"联网搜索"后调用 ``web_search`` 会被门卫以「未列入角色白名单」拒绝，
+            而不是"看着能调、调了才失败"。**门卫语义本身不改**。
 
     Returns:
         ``(agent_executor, gatekeeper)``：前者接收 ``Step``，返回结果或抛异常；
@@ -235,7 +240,7 @@ def build_step_executor(
     # 函数内懒导入 _resolve_workspace_dir 避免 routes ↔ orchestrator 循环导入。
     from agent_builder.api.routes import _resolve_workspace_dir
 
-    role_perms = get_default_role_perms()
+    role_perms = filter_role_perms(get_default_role_perms(), capabilities)
     gatekeeper = ToolGatekeeper(
         role_perms=role_perms,
         workspace_dir=_resolve_workspace_dir(),
@@ -306,6 +311,7 @@ def run_plan(
     llm_client: Any = None,
     role_brief_mode: str | None = None,
     approved_tools: set[str] | None = None,
+    capabilities: set[str] | frozenset[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """执行已确认的 Plan，返回 (execution_results, gatekeeper_audit)。
 
@@ -322,6 +328,7 @@ def run_plan(
             ``high_risk_tools`` 的步骤：一律置 ``Approval(required=True)``，仅当工具
             在该集合中时才附 ``granted_by`` → 否则被门卫拒绝（E_PERMISSION）。
             None / 空集 = 不授权任何高风险工具（安全默认）。
+        capabilities: 任务级能力开关（卡 45）；None = 全部启用。见 ``build_step_executor``。
 
     Returns:
         元组 (execution_results, gatekeeper_audit)：
@@ -339,6 +346,7 @@ def run_plan(
         llm_client=llm_client,
         role_brief_mode=role_brief_mode,
         approved_tools=approved_tools,
+        capabilities=capabilities,
     )
 
     # 3. 派发执行。Router 要求 confirmed_by_user=True，否则抛 E_VALIDATION。

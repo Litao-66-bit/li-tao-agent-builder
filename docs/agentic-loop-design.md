@@ -300,3 +300,22 @@ node --check frontend/js/app.js
 
 P2 完成时的基线：`ruff` 干净、`pytest` 1865 passed / 11 skipped
 （P0 开始 1773 → P0 结束 1811 → P1 决策器 1839 → P1 接线 1847 → P2 开关 1849 → P2 提议闭环 1865）。
+
+
+## 交付形态与分阶段契约（2026-10-11 补充）
+
+提示词里新增两条硬性规则（`agent_builder/api/deciders.py` 的【硬性规则】12 / 13），
+规划提示词（`agent_builder/api/routes.py` 的 `_PLAN_TEXT_PROMPT`）与分解器
+（`agent_builder/roles/decomposer.py`）同口径：
+
+- **12 交付形态要对齐**：需求涉及「给我用 / 界面 / 前端 / 页面」时，交付物必须含
+  **可打开的入口**（Web：页面文件 + 提供它的路由；CLI：可执行入口 + 用法），并说明怎么启动；
+  拿不准就在 answer 里写明「本次交付的是哪一种、另一种还没做」。
+- **13 分阶段交付必须留下接口契约**：只做了一部分时，工作区里要留下
+  `docs/api-contract.md`（端点 / 字段 / 示例）或后端自带的 OpenAPI，
+  并在 answer 里点明「下一步可据此做前端」。
+
+**为什么**（实测 2026-10-11）：用户要「给我做一个 agent」，计划只产出 `src/agent.py` +
+`main.py` + `requirements.txt` + `tests/`，**没有任何前端**；而第二阶段（做前端）既没有契约、
+任务之间又没有记忆，前后端接不上。配套的「任务续接」见 `TaskEntry.context_note` 与前端
+`buildContinuationContext()`。
