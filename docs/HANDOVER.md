@@ -1,5 +1,16 @@
 # 项目交接提示词（Agent Builder）
 
+> **2026-10-11 完成（卡 19–34，共 16 张；除卡 21 外全部已修并实测）**：
+> ① agentic 也产出**可读执行计划**并在界面默认展开（**不再是黑箱**：实测执行前就有 509 字计划）；
+> ② `/run`、`/resume` 改为**非阻塞执行 + 前端轮询**，长任务**不再整屏冻结**
+> （实测放行续跑由「22 秒一动不动、最后一次性冒出 13 张卡」变成 2→3→4→5→6→7→8 逐步出卡）；
+> ③ **失败观察保尾**（pytest 的失败原因在末尾）+ 观察被截断时不计入「重复失败」；
+> ④「系统核对」事实行**按测试/命令分开报**并给最近一次结果；
+> ⑤ `sandbox_run` 两个 P0：**子进程编码**（中文输出必崩）与 **cwd 越界**（相对路径跑到仓库同名诱饵）；
+> ⑥ 产物面板**文件类型可见**（图标+徽标+保留扩展名）、保存/打开**报告绝对路径**；
+> ⑦ 仓库清理（缓存 ≈1.5MB + `outputs/` 诱饵目录）。
+> **基线 2284 passed / 11 skipped**；细节见「卡 19–34」一节 + `C:\agent\bug-cards-2026-10-10.md`。
+
 > **本文件已瘦身**：删掉了已完成的审计整改明细、A/B 完整数据、文件级变更流水账等历史叙述，只保留**结论、当前架构、硬性约束、下一步计划**。历史细节如需要可从 git 或旧版本找回。
 >
 > **对话优先 + 产物入口已完成**（「你好」不再弹执行计划；「查看产物」只在真产出时出现；agentic 下不渲染计划块），详见「对话优先 + 产物入口」一节。
@@ -15,7 +26,7 @@
 > **同日第二轮实测（接上）**：按「先测后修」再修 **卡 13–卡 18** + 新增 **③ 后端「验证证据」事实行**，并**撤回误报的卡 16**。
 > 其中 **卡 18（观察窗口 800 字装不下源码结构）** 与 **卡 17（重复的「成功」动作被算作有进展）** 是"反复重读同一个文件 → 预算烧光"的真正根因；
 > 修完跑出**首轮真正收敛**（12 步、测试 5 项通过、沙箱实跑成功，连续重复轮次 6 → 0）—— 详见「今日完成（2026-10-08）」下的「续：同日第二轮实测」小节。
-> 基线 **2033 → 2077 passed / 11 skipped**。
+> 基线 **2033 → 2077 passed / 11 skipped**（该轮历史基线；**当前 2284**，见文首）。
 >
 > **未推送提醒**：本地 `main` 有 **6 个代码提交 + 后续 docs 提交**尚未推送（**具体数量以
 > `git rev-list --count origin/main..HEAD` 为准**，别抄这里写死的数字）。本地**已有 `.git`**
@@ -56,15 +67,22 @@ test_run 本机跑不通（改用 sys.executable -m pytest）、
 卡 7（code_search 改报「命中 N 条」）、卡 14（MAX_LOOP_STEPS 12 → 20）、
 并**撤回误报的卡 16**（前端本来就会在载入时与后端核对密钥状态；上次是我的按键发给了非焦点窗口）；
 复跑得**首轮真正收敛**（12 步 / 测试 5 项通过 / 沙箱实跑成功，连续重复轮次 6 → 0）。
-剩余：**唯一遗留 = 全部改动未推送 GitHub**（本地无 .git，只能走 REST API；已免 token 算出精确清单：
-60 个内容不同 + ~81 个本地新增应推送，另有 33 个远端独有文件必须靠 base_tree 保住，
-见 `.dsh-scratch/unpushed-report.txt`）。
+【2026-10-11 本轮完成（卡 19–34；除卡 21 外全部已修并实测）】
+agentic 也产出**可读执行计划**并默认展开（不再黑箱）；/run 与 /resume 改为**非阻塞执行 + 前端轮询**
+（长任务不再整屏冻结）；失败观察**保尾**且被截断的观察不计入「重复失败」；
+「系统核对」事实行**按测试/命令分开报**并给最近一次结果；
+**sandbox_run 两个 P0**（子进程编码：中文输出必崩；cwd 越界：相对路径跑到仓库同名诱饵）；
+产物面板**文件类型可见**、保存/打开**报告绝对路径**；仓库清理（缓存 ≈1.5MB + outputs/ 诱饵目录）。
+**唯一遗留 = 卡 21**（`.env.example` 里的真实密钥，**用户自行在推送前删除**，本轮未改该文件）。
+
+剩余：改动已在**本地提交**，但**尚未推送 GitHub** —— 推送前先按本文「未推送状态」一节的顺序
+做干净镜像校验，并**务必先删掉 `.env.example` 里的密钥**（卡 21）。
 ③ 加宽后的触发条件**已于 2026-10-09 实机验证通过**（真实密钥 + agentic 收敛轮，结论里正确挂上
 「（系统核对：真实运行 1 次，成功 1 次）」，且独立复跑该测试得 2 passed）。
 
 硬性约束：roles/ 层禁止 import api/tools/llm；颜色只写 CSS token、交互一律 <button>；
 会话持久化只用 sessionStorage；改前端先看 tests/test_frontend_workspace_ui.py 等静态接线测试；
-基线 = ruff 干净 + pytest 全绿（当前 **2235 passed / 11 skipped**）。
+基线 = ruff 干净 + pytest 全绿（当前 **2284 passed / 11 skipped**）。
 
 运行与校验（项目根）：
 - 后端：$env:PYTHONPATH = ".deps"; python -m uvicorn agent_builder.api.app:create_app --factory --port 8000
@@ -74,7 +92,7 @@ test_run 本机跑不通（改用 sys.executable -m pytest）、
 - 校验：python -m ruff check . ; python -m pytest ; node --check frontend/js/app.js
 - A/B 跑批：python -m agent_builder.evaluation.mode_ab --model deepseek-chat --reps 3
   （需先在前端存密钥；密钥是内存态，后端每次重启都要重存）
-- ⚠️ 前端有缓存坑：改了前端资源要 bump index.html 里的 ?v= 版本号（当前 **20261118**），并在浏览器 Ctrl+Shift+R
+- ⚠️ 前端有缓存坑：改了前端资源要 bump index.html 里的 ?v= 版本号（当前 **20261011b**），并在浏览器 Ctrl+Shift+R
 ```
 
 ## 今日完成（2026-10-07）
@@ -308,7 +326,7 @@ test_run 本机跑不通（改用 sys.executable -m pytest）、
   ① DSH 沙箱下直接跑 `pytest` 会得 `1728 passed / 349 errors` —— 全是 `tmp_path` 夹具的
   `PermissionError WinError 5`，根因是 Python `os.mkdir(mode=0o700)` 写的显式权限绕过了沙箱继承授权，
   连创建者自己都列不了该目录（`os.mkdir(0o755/0o777)` 与 PowerShell `New-Item` 都正常）；
-  用「PowerShell 预建临时根 + 只放宽临时目录 0o700 的 shim」可跑出 **2077 passed / 11 skipped**，
+  用「PowerShell 预建临时根 + 只放宽临时目录 0o700 的 shim」可跑出 **2077 passed / 11 skipped**（该轮数字），
   配方与证据见 `.dsh-scratch/README.md`。
   ② 浏览器自动化已接入（Playwright MCP 驱动本机 Chrome，工具名 `mcp__browser__*`），
   安装/验证/回滚见 `.dsh-scratch/BROWSER-MCP.md`。
@@ -435,6 +453,44 @@ test_run 本机跑不通（改用 sys.executable -m pytest）、
 4. **产品级缺口**：生成的「论文调研 agent」只是**离线骨架**（`OfflineBackend` 在 4 条硬编码语料里匹配），
    因为这条链路没给"调研"配可用的检索工具 —— 想让输出真有用，得把联网检索接进来。
 
+## 卡 19–34（2026-10-11 本轮 16 张卡）
+
+> 完整版（现象 / 代码证据 / 确定性复现 / 修后实测）见 `C:\agent\bug-cards-2026-10-10.md`。
+> 下面只留**结论与落点**，方便下一个会话快速定位。
+
+| 卡 | 一句话 | 主要落点 |
+|---|---|---|
+| 19 | 观察结果在提示词里被统一缩进 5 空格 → 模型照抄 `old_string` 时每行多 4 空格 → `file_edit` 永远失配 → 空转判停 | `api/deciders.py`（观察逐行第 0 列 + `<observation>` 定界符） |
+| 20 | 零用例的 pytest 被判 `done`（假绿）：计数正则里的 `warning` 分支让 `1 warning in 0.01s` 解析成 `(0,0,0)` | `roles/test_runner.py`（去掉 `warning`、认 `collected 0 items`、全 0 不算通过） |
+| 21 | ⏸ **未修（用户自理）**：`.env.example` 里是真实密钥且该文件被 git 跟踪 | — |
+| 22 | 打开**已被删除**的项目 → 静默回退到**产品自己的源码根**（工作区越界） | `api/routes.py`（open 前校验）、`api/projects.py`（失效不再换目录） |
+| 23 | `test_run` 每次在工作区留下**列不出、删不掉**的 `pytest-cache-files-*` | `tools/impl/test_run.py`（无条件 `-p no:cacheprovider`） |
+| 24 | 每次加载页面一个 `favicon.ico` 404 | `frontend/index.html`（内联 `data:` 图标） |
+| 25 | `loop_state.decided_by` 出现契约外的 `resumed` | `api/schemas.py`（契约补齐） |
+| 26 | `sandbox_run` 子进程**编码没锁死**：后端带 `PYTHONIOENCODING=utf-8` 时，任何中文输出都崩（`NoneType has no len()`）或**丢掉全部输出** | `tools/impl/sandbox_run.py`（读侧 utf-8 + 写侧 PYTHONIOENCODING） |
+| 27 | `sandbox_run` 的 cwd 缺省是**进程 cwd** → 相对路径命令跑到**仓库同名诱饵**（读的对象 ≠ 跑的对象） | `tools/impl/sandbox_run.py`（cwd 缺省 = 当前工作区）、`docs/tools.md` |
+| 28 | 「系统核对」事实行把**测试**与**命令**混在一起数 → 「7 项全部通过」后面跟着「失败 8 次」 | `narrate.py`（按测试/命令分开报 + 最近一次；补认「N passed」） |
+| 29 | **长任务期间前端整屏冻结**：`/run`、`/resume` 同步阻塞 + 过程中什么都不发布 | `api/routes.py`（`wait=false` + 后台线程）、`api/agent_loop.py`（`on_round` 逐轮发布）、`frontend/js/{api,app}.js`（轮询 + 逐轮临时卡片） |
+| 30 | 失败观察**保头丢尾**（pytest 的原因在末尾）→ 模型看不到原因只能重发同一动作 → 被空转闸掐死 | `api/deciders.py`（`prefer_tail`）、`api/agent_loop.py`（被截断的观察豁免重复失败计数） |
+| 31 | agentic 下**计划完全看不见**（黑箱）：计划块只在 workflow 渲染，后端 agentic 也不产出计划 | `api/routes.py`（`plan_text`）、`frontend/js/app.js`（📋 执行计划区块，正文默认展开） |
+| 32 | 产物面板看不出**文件类型**（所有文件同一个 📄，长名截断后连扩展名都没了） | `frontend/js/app.js`（类型图标/徽标/保留扩展名的短名） |
+| 33 | 保存/打开**不告诉真实落盘位置**（只有工作区相对路径） | `frontend/js/app.js`（记住 `workspace_dir` + `absoluteWorkspacePath()`） |
+| 34 | 仓库历史遗留物清理 | 已删：`.pytest_cache` / `.ruff_cache` / `__pycache__`×11 / 空 `_sample_backup` / **`outputs/` 诱饵目录**；按用户要求**保留**根目录那个 HTML 与 `docs/reports/*.before-*.json` |
+
+### 本轮新增的**长期口径**（改这块之前先读）
+
+1. **观察内容不得被提示词改写缩进**：边界只能用定界符（`<observation>`）表达，缩进即原文缩进。
+2. **失败观察保尾**；观察**被截断**时，紧接着的同一动作**不计入「重复失败」**（模型是在索取信息）。
+   空转计数照旧兜底，所以不会无限重发。
+3. **计数正则不得含 `warning`/`warnings`**；三种计数**全 0 一律不算通过**（否则「没测到」被伪装成「测试通过」）。
+4. **长任务必须非阻塞**：`/run`、`/resume` 支持 `wait=false`（后台线程 + `running` 标志），
+   循环每完成一轮刷新 `entry.loop_state`（`on_round`），前端轮询着边跑边渲染。
+5. **相对路径一律按当前工作区解析**：`test_run` 的 target、`sandbox_run` 的 cwd 都已归位；
+   新增任何"执行外部东西"的工具都要照做（否则会跑到产品仓库的同名文件上）。
+6. **改前端资源必须 bump `?v=`**，并**先断言新代码已加载**再验证（踩过两轮空测）。
+7. **既有测试可能把缺陷钉成规格**：本轮 `test_no_path_uses_default`（断言 `"cwd" not in kwargs`）
+   就是活例子 —— 改这类 bug 必须连测试一起改，但**不得削弱保护意图**。
+
 ## 基础运行环境
 
 - **操作系统**：Windows + PowerShell
@@ -472,13 +528,17 @@ $env:PYTHONPATH = ".deps"
 node --check frontend/js/app.js
 ```
 
-**当前基线：`ruff` 干净、`pytest` 2077 passed / 11 skipped、`node --check` 通过。**
+**当前基线：`ruff` 干净、`pytest` 2284 passed / 11 skipped、`node --check` 通过。**
 
 ## 前端缓存注意事项（本会话反复踩，务必知道）
 
 `python -m http.server` **不发 `Cache-Control`**，浏览器按启发式缓存，会出现「新 HTML + 旧 JS」→ 旧 JS 去操作已被删除的 DOM（如旧的 `#stageBar`）→ `TypeError`，页面看起来「坏了」。
 
-- `frontend/index.html` 的三处静态资源已带版本号：`styles.css?v=` / `js/api.js?v=` / `js/app.js?v=`（**当前 20261104**）
+- `frontend/index.html` 的三处静态资源已带版本号：`styles.css?v=` / `js/api.js?v=` / `js/app.js?v=`（**当前 20261011b**）
+- ⚠️ **实测教训（2026-10-11）**：改完前端**忘了 bump 版本号**，前两轮验证全部无效 ——
+  只给页面 URL 加 `?cb=` 只换 HTML，**带版本号的子资源仍走缓存**，测到的还是旧 `app.js`。
+  做法：改前端资源后 bump 三处 `?v=`，并在验证前先断言新代码真的加载了
+  （例如 `typeof startTaskRunPoller === 'function'`）。
 - **改任何前端资源后必须 bump 这个版本号**（三处保持一致），否则用户浏览器会继续用旧缓存
 - 用户侧：`Ctrl+Shift+R` 一次；或 F12 → Network 勾 **Disable cache**（之后就不用再强刷）
 - 后端改动**必须重启或带 `--reload`**：本会话因为没带 `--reload`，新加的 `DELETE /tasks/{id}` 没加载，前端报 `Method Not Allowed`
@@ -553,7 +613,10 @@ node --check frontend/js/app.js
     ③ fine-grained PAT 必须勾 **`Contents: Read and write`**（`Administration` 不行）；④ 网络很抖，**带重试**；
     ⑤ **绝不对已推送的提交 `--amend`**（会 non-fast-forward 被拒）→ 在已推送提交**之上追加**新提交。
   - 上一轮说的「PAT 失效 / 只能走 REST API」**已过时**：本地有 `.git` 后直接 `git push` 即可。
-- 下面这几段是 **2026-10-09 早些时候（推送之前）的历史盘点**，保留作为"当时如何逐文件核对差异"的方法记录：
+- **2026-10-11 起**：本轮 16 张卡的改动**已在本地提交**（见 `git log -1`；**不含 `.env.example`**）。
+  推送前务必：① 先删掉 `.env.example` 里的真实密钥（**卡 21**）；② 按上面的顺序做干净镜像校验。
+- 下面这几段是 **2026-10-09 早些时候（推送之前）的历史盘点**，保留作为"当时如何逐文件核对差异"的方法记录
+  —— ⚠️ **其中的「本地无 `.git`、只能走 REST API」已过时**，别再照做：
 - 本会话全部改动**未推送**（当时本地无 `.git`）。想确认「到底哪些没推」，最可靠的做法是拉取远端 `main` 的 tree 与本地文件逐一比对。
 - **2026-10-09 已按上述办法精确盘点**（免 token：远端 `main` 的 tree 与本地逐文件比 git blob 哈希，
   脚本 `.dsh-scratch/diff_remote.py`，四类完整清单 `.dsh-scratch/unpushed-report.txt`）：
@@ -849,7 +912,7 @@ loop-002  memory_write  E_VALIDATION: scope 非法 'long_term'，可选: ['long'
 
 ### 验证与遗留
 
-- `ruff` 干净、`pytest` **1955 passed / 11 skipped**、`node --check` 通过；
+- `ruff` 干净、`pytest` **1955 passed / 11 skipped**（**该轮历史基线，已过时；当前见文首 2284**）、`node --check` 通过；
   静态接线测试同步改写（`tests/test_frontend_workspace_ui.py` 新增 `TestConclusionBlock`、
   `TestProcessBlock.test_决策理由收进过程块`，改写计划块 / 摘要行 / 0 步分支三处断言，意图未削弱）；
   端到端新增 `tests/test_agentic_mode.py::TestAgenticNoDag` / `::TestConclusion`、
