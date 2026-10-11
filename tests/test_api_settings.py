@@ -248,3 +248,77 @@ class TestAtomicWrite:
         files = list(Path(secret_path().parent).glob("*.json"))
         assert len(files) == 1
         assert load_secret().api_key == "sk-" + "2" * 24
+
+
+class TestDirectoryPermissionIsTraversable:
+    """回归：**绝不能把凭据目录 chmod 成 0600** —— 那是真实的 CI 事故。
+
+    事故经过（2026-10-11，run 38136077043）：`save_secret` 里对**目录**调了
+    `chmod 0o600`。POSIX 上目录少了 `x`（traverse）位就**无法穿越**，
+    紧接着的 `tmp.write_text(...)` 直接 `EACCES` →
+    `PermissionError: '/tmp/pytest-of-runner/.../secrets/api_key.json.tmp'`，
+    ubuntu 上 9 条用例全红；而本机 Windows 的 `os.chmod` 对目录基本是 no-op，
+    所以**本地永远绿**。
+
+    ⚠️ 因此这条测试**不能**用"实际权限效果"来验（在 Windows 上验不出来），
+    只能**盯住传入 `os.chmod` 的参数语义**：目标是目录时，模式必须保留执行位。
+    """
+
+    def test_目录的chmod模式必须保留执行位(self, client: TestClient, monkeypatch) -> None:
+        calls: list[tuple[str, int, bool]] = []
+        real_chmod = os.chmod
+
+        def spy(path, mode, *args, **kwargs):
+            target = Path(path)
+            calls.append((str(target), mode, target.is_dir()))
+            return real_chmod(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(os, "chmod", spy)
+        _set_key(client, "sk-" + "t" * 24)
+        resp = client.post("/settings/api-key/persist?persist=true", headers=_LOCAL_HEADERS)
+        assert resp.status_code == 200, resp.text
+
+        dir_calls = [c for c in calls if c[2]]
+        assert dir_calls, "应当对凭据目录做过权限收紧（否则这条回归没测到东西）"
+        for path, mode, _is_dir in dir_calls:
+            assert mode & 0o111, (
+                f"目录 {path} 被 chmod 成 {oct(mode)} —— 缺少执行位会让目录无法穿越，"
+                "紧接着的写入必然 EACCES（CI 真实事故）"
+            )
+
+    def test_文件仍然是0600(self, client: TestClient, monkeypatch) -> None:
+        """收紧目录的同时，**文件**必须仍旧只有属主可读写。"""
+        calls: list[tuple[str, int, bool]] = []
+        real_chmod = os.chmod
+
+        def spy(path, mode, *args, **kwargs):
+            target = Path(path)
+            calls.append((str(target), mode, target.is_dir()))
+            return real_chmod(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(os, "chmod", spy)
+        _set_key(client, "sk-" + "u" * 24)
+        client.post("/settings/api-key/persist?persist=true", headers=_LOCAL_HEADERS)
+
+        # 原子写先写 .tmp 再 replace → chmod 的目标是 ``api_key.json.tmp``（随后被改名）。
+        file_calls = [c for c in calls if not c[2] and c[0].endswith(".tmp")]
+        assert file_calls, "应当对密钥文件（临时文件）做过权限收紧"
+        for path, mode, _is_dir in file_calls:
+            assert mode == 0o600, f"密钥文件 {path} 的模式应为 0o600，实际 {oct(mode)}"
+
+    def test_posix下目录实际是0700且可穿越(self, client: TestClient) -> None:
+        """在真 POSIX 上再验一次实际效果（Windows 上跳过：chmod 对目录无效）。"""
+        if os.name == "nt":
+            pytest.skip("Windows 的 os.chmod 对目录基本是 no-op，实际效果验不出来")
+
+        _set_key(client, "sk-" + "v" * 24)
+        client.post("/settings/api-key/persist?persist=true", headers=_LOCAL_HEADERS)
+
+        directory = secret_path().parent
+        assert directory.stat().st_mode & 0o111, "目录必须可穿越"
+        # 真的还能在目录里创建/读取文件（穿越能力的实证）
+        probe = directory / "probe.txt"
+        probe.write_text("ok", encoding="utf-8")
+        assert probe.read_text(encoding="utf-8") == "ok"
+        probe.unlink()
+

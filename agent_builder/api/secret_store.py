@@ -50,6 +50,9 @@ DEFAULT_SECRET_FILE = "api_key.json"
 
 #: 文件模式：仅属主可读写。
 _SECRET_FILE_MODE = 0o600
+#: 目录模式：仅属主可访问，但**必须保留 x（traverse）位** —— 否则目录里既不能创建也不能 stat。
+#: 用 0o700 而不是 0o600：0600 的目录在 POSIX 上等于"自己都进不去"（真实踩过，CI 9 条红）。
+_SECRET_DIR_MODE = 0o700
 
 
 def persist_enabled() -> bool:
@@ -82,16 +85,21 @@ class StoredSecret:
     fingerprint: str = ""
 
 
-def _restrict_permissions(path: Path) -> None:
-    """把文件权限收紧到"仅属主可访问"（尽力而为，失败不影响可用性）。
+def _restrict_permissions(path: Path, mode: int = _SECRET_FILE_MODE) -> None:
+    """把 ``path`` 的权限收紧到"仅属主可访问"（尽力而为，失败不影响可用性）。
 
-    POSIX：``chmod 0o600``。Windows：``os.chmod`` 只能翻转只读位，
-    所以额外用 ACL（``icacls``）把继承权限断开、只留当前用户 —— 不引入第三方依赖。
+    ⚠️ **文件和目录的模式不能混用**（这条踩过真实的 CI 事故，见下）：
+    - POSIX：文件用 ``0o600``；**目录必须保留 ``x`` 位**（用 ``0o700``）——
+      目录没有 ``x`` 就**无法穿越**，之后在该目录里 ``create`` / ``stat`` / ``unlink``
+      一律 ``EACCES``。实测：把目录 chmod 成 0600 后，紧接着的 ``tmp.write_text(...)``
+      直接 ``PermissionError``，于是"落盘"永远失败（CI 上 9 条用例全红）。
+    - Windows：``os.chmod`` 只能翻转只读位（对目录基本是 no-op），
+      所以额外用 ACL（``icacls``）把继承权限断开、只留当前用户 —— 不引入第三方依赖。
     """
     try:
-        os.chmod(path, _SECRET_FILE_MODE)
+        os.chmod(path, mode)
     except OSError:
-        logger.warning("密钥文件权限收紧失败（忽略）：%s", path, exc_info=True)
+        logger.warning("权限收紧失败（忽略）：%s", path, exc_info=True)
         return
     if os.name != "nt":
         return
@@ -107,14 +115,17 @@ def _restrict_permissions(path: Path) -> None:
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        logger.warning("密钥文件 ACL 收紧失败（忽略）：%s", path, exc_info=True)
+        logger.warning("ACL 收紧失败（忽略）：%s", path, exc_info=True)
 
 
 def load_secret() -> StoredSecret | None:
-    """读回落盘的密钥；文件不存在 / 读坏 / 形状不对都返回 None（绝不抛）。
+    """读回落盘的密钥；文件不存在 / 读坏 / 形状不对 / **目录不可穿越**都返回 None（绝不抛）。
 
     **不检查 ``persist_enabled()``** —— 那是调用方（启动流程）的判定；
     模块本身只负责"文件里有什么"。否则关掉开关后连"读"都不肯做，无法给出准确状态。
+
+    ``OSError`` 覆盖 ``PermissionError``：凭据目录权限被收紧到连自己都进不去时，
+    这里必须降级成"没有可用密钥"，而**不是**让后端启动崩掉（读侧永远要能容错）。
     """
     path = secret_path()
     try:
@@ -150,7 +161,8 @@ def save_secret(api_key: str, *, fingerprint: str = "") -> bool:
     ) + "\n"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        _restrict_permissions(path.parent)
+        # 目录用 0o700（保留 x 位！）——用 0600 会让目录"自己都进不去"，紧接着的写就 EACCES。
+        _restrict_permissions(path.parent, _SECRET_DIR_MODE)
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(body, encoding="utf-8", newline="")
         _restrict_permissions(tmp)
