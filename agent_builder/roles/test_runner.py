@@ -38,11 +38,17 @@ MAX_RETRIES = 1
 ExecutorFn = Callable[[Step], Any]
 
 # pytest 汇总行里的计数，如 "39 passed in 0.52s" / "1 failed, 2 passed"。
+# **不要把 warning/warnings 算进来**（实测任务 8d79faee，2026-10-10）：零用例时
+# pytest 9.1.1 打的是 `1 warning in 0.01s`（**不是**标准的 `no tests ran`），这一行会
+# 让计数解析出 (0, 0, 0) → all_passed=True → 角色层判 done —— 一次「什么都没测到」
+# 的空跑被伪装成「测试通过」，还会被当成有效进展把空转计数清零。
 _PYTEST_COUNT_RE = re.compile(
-    r"(\d+)\s+(passed|failed|error|errors|xfailed|xpassed|skipped|deselected|warning|warnings)\b"
+    r"(\d+)\s+(passed|failed|error|errors|xfailed|xpassed|skipped|deselected)\b"
 )
-# pytest 明确「一条用例都没跑到」（exit code 5）。
-_NO_TESTS_RE = re.compile(r"no tests ran", re.IGNORECASE)
+# pytest 明确「一条用例都没跑到」（exit code 5）的**两种**措辞：标准措辞是
+# `no tests ran`；实测 pytest 9.1.1 在有缓存告警时只打
+# `collecting ... collected 0 items` + `1 warning in 0.01s`，所以两种都必须认。
+_NO_TESTS_RE = re.compile(r"no tests ran|collected 0 items", re.IGNORECASE)
 # 工具侧的输出截断标记（见 tools/impl/test_run.py 的 MAX_OUTPUT_CHARS）。
 _TRUNCATED_MARK = "…[已截断"
 # `-v` 明细行的结果标记：仅在汇总行丢失（输出被截断）时降级使用。
@@ -126,6 +132,11 @@ def _parse_pytest_counts(output: str) -> tuple[int, int, int] | None:
                 failed += int(number)
             elif kind.startswith("error"):
                 error += int(number)
+        if passed == 0 and failed == 0 and error == 0:
+            # 三种计数全 0 = 这一行根本没核对到用例（例如只有 `5 skipped in 0.1s`
+            # 或只有 `2 warnings in 0.1s`）→ 继续往前找真正的汇总行；找不到就
+            # 一路 None，由调用方判「无法核对」（绝不默认 done）。
+            continue
         return passed, failed, error
     marks = _VERBOSE_MARK_RE.findall(output)
     if marks:

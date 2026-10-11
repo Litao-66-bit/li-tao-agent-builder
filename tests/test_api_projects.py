@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -178,6 +179,40 @@ class TestSwitchWorkspace:
 
     def test_切换不存在的项目返回404(self, client: TestClient) -> None:
         assert client.post("/projects/nonexistent/open", headers=LOCAL_HEADERS).status_code == 404
+
+    def test_目录已被删除的项目不能再打开(self, client: TestClient, tmp_path: Path) -> None:
+        """回归（实测 2026-10-10）：原来 ``/open`` 只查 id、不查目录，200 成功切过去；
+        随后 ``current_workspace_dir()`` 静默回退到 ``default_workspace_dir()``
+        （= 产品自己的源码根）→ 「打开一个死项目」变成「读写产品源码」，
+        而同一个 ``/projects`` 响应里 ``current_project_id``（死项目）与
+        ``workspace_dir``（产品仓库）还互相矛盾。现在两道都必须堵住。
+        """
+        workspace = tmp_path / "ws-dead"
+        workspace.mkdir()
+        project = _register(client, workspace).json()
+        shutil.rmtree(workspace)
+
+        # ① 目录失效后 workspace_dir 必须**如实**指向那个失效目录，
+        #    绝不能悄悄换成别的目录（尤其不能是产品自己的源码根）。
+        listing = client.get("/projects", headers=LOCAL_HEADERS).json()
+        assert Path(listing["workspace_dir"]).resolve() == workspace.resolve()
+        assert not Path(listing["workspace_dir"]).is_dir()
+
+        # ② 已失效的项目不能再被打开。
+        resp = client.post(f"/projects/{project['project_id']}/open", headers=LOCAL_HEADERS)
+        assert resp.status_code == 400
+        assert "不存在" in resp.json()["detail"]
+
+        # ③ 换成一个有效目录仍要能正常打开。
+        good = tmp_path / "ws-good"
+        good.mkdir()
+        good_project = _register(client, good).json()
+        assert (
+            client.post(
+                f"/projects/{good_project['project_id']}/open", headers=LOCAL_HEADERS
+            ).status_code
+            == 200
+        )
 
     def test_重复登记同路径复用同一项目(self, client: TestClient, tmp_path: Path) -> None:
         workspace = tmp_path / "ws-b"

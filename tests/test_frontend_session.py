@@ -33,7 +33,7 @@ class TestCardScopedToTask:
         source = _read("frontend/js/app.js")
         # 新 IA：主入口是「放行并继续」（/resume 携带 approved_tools）；改计划/恢复/放弃保留。
         for call in (
-            "api.resumeTask(taskId, tools)",
+            "api.resumeTask(taskId, tools, { wait: false })",
             "api.rejectTask(taskId)",
             "api.resumeTask(taskId)",
             "api.abortTask(taskId)",

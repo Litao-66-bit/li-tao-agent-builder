@@ -245,16 +245,21 @@ class TestRunPauseAndResumeWiring:
 
     def test_api层暴露run与带授权的resume(self) -> None:
         source = _read("frontend/js/api.js")
-        assert "runTask: (id, approvedTools = null)" in source
-        assert "resumeTask: (id, approvedTools = null)" in source
+        assert "runTask: (id, approvedTools = null, opts = {})" in source
+        assert "resumeTask: (id, approvedTools = null, opts = {})" in source
         # 授权字段名必须是后端契约的 approved_tools。
         assert "approved_tools: approvedTools" in source
+        # 长任务不能冻住界面：两条执行路径都必须能要求后端「立刻返回、后台跑」。
+        assert source.count("wait=false") == 2
 
     def test_app默认直接跑并渲染提醒卡(self) -> None:
         source = _read("frontend/js/app.js")
         # /plan 之后自动 /run（默认直接跑）；0 步分支不跑，直接给出可执行入口。
         plan_body = _function_body(source, "applyPlanResult")
-        assert "await api.runTask(taskId)" in plan_body
+        # **非阻塞**起执行（wait:false）→ 循环在后台线程跑，前端轮询着边跑边渲染。
+        assert "await api.runTask(taskId, null, { wait: false })" in plan_body
+        assert "startTaskRunPoller(taskId)" in plan_body
+        # 后端若同步跑完（或旧后端不支持 wait）仍要能走终态渲染，不能只剩轮询一条路。
         assert "applyRunResult(ran)" in plan_body
         # 首次发送即走同一「应用分解结果」函数（不复制粘贴）。
         assert "await applyPlanResult(task.task_id, result)" in source
@@ -270,7 +275,9 @@ class TestRunPauseAndResumeWiring:
         body = _function_body(source, "handleApprovePending")
         assert "const taskId = cardTaskId(card);" in body
         assert "JSON.parse(card.dataset.approvedTools" in body
-        assert "await api.resumeTask(taskId, tools)" in body
+        # 放行后的续跑同样可能很久：非阻塞起 + 轮询（实测冻结 22 秒就是这条路径）。
+        assert "await api.resumeTask(taskId, tools, { wait: false })" in body
+        assert "startTaskRunPoller(taskId)" in body
 
     def test_改计划与手动中断仍保留(self) -> None:
         source = _read("frontend/js/app.js")
@@ -283,8 +290,9 @@ class TestRunPauseAndResumeWiring:
 class TestInterruptWiring:
     """回归：「⏸ 中断」按钮必须在**执行期间**可用。
 
-    ``/run``、``/resume`` 是同步阻塞接口（整段循环跑完才返回），前端若不先乐观置
-    「执行中」，按钮（仅在 ``executing`` 且未停下时可点）在整段执行期间都是灰的。
+    ``/run``、``/resume`` 现在以 ``wait=false`` 非阻塞起执行（循环跑在后台线程），
+    前端更要**先把 chip 乐观置成「执行中」**：否则整个后台执行期间中断按钮都是灰的，
+    而它恰恰是长任务唯一的刹车。
     """
 
     def test_存在乐观置执行中的助手(self) -> None:
@@ -297,12 +305,16 @@ class TestInterruptWiring:
     def test_run之前先置执行中(self) -> None:
         body = _function_body(_read("frontend/js/app.js"), "applyPlanResult")
         assert "markTaskRunning(taskId);" in body
-        assert body.index("markTaskRunning(taskId)") < body.index("api.runTask(taskId)")
+        assert body.index("markTaskRunning(taskId)") < body.index(
+            "api.runTask(taskId, null, { wait: false })"
+        )
 
     def test_resume之前先置执行中(self) -> None:
         body = _function_body(_read("frontend/js/app.js"), "handleApprovePending")
         assert "markTaskRunning(taskId);" in body
-        assert body.index("markTaskRunning(taskId)") < body.index("api.resumeTask(taskId, tools)")
+        assert body.index("markTaskRunning(taskId)") < body.index(
+            "api.resumeTask(taskId, tools, { wait: false })"
+        )
 
     def test_中断按钮仍只在执行阶段可用(self) -> None:
         body = _function_body(_read("frontend/js/app.js"), "updateTaskStatus")
@@ -1453,3 +1465,149 @@ def _function_body(source: str, name: str) -> str:
     match = re.search(r"\n}\n", source[start:])
     end = start + (match.end() if match else len(source) - start)
     return source[start:end]
+
+
+class TestNonBlockingRunWiring:
+    """非阻塞执行 + 轮询接线（实测 2026-10-10：长任务期间前端整屏冻结）。
+
+    后端把循环放到后台线程、立刻返回 ``running=true``；前端的责任是**继续轮询**并把
+    每一步完成的结果增量渲染出来，而不是干等那一次同步响应。
+    """
+
+    def test_用wait_false起执行(self) -> None:
+        app = _read("frontend/js/app.js")
+        api = _read("frontend/js/api.js")
+
+        assert "wait: false" in app, "起执行时必须显式要求后端非阻塞"
+        assert "wait=false" in api, "api.js 要把 wait=false 拼进 URL"
+
+    def test_有轮询器且会边跑边渲染(self) -> None:
+        app = _read("frontend/js/app.js")
+
+        assert "function startTaskRunPoller" in app
+        assert "function stopTaskRunPoller" in app
+        assert "function renderProgress" in app
+        assert "RUN_POLL_INTERVAL_MS" in app
+        # 轮询器必须按后端下发的 running 决定继续还是收尾
+        assert "task.running" in app
+
+    def test_执行入口都接了轮询器(self) -> None:
+        app = _read("frontend/js/app.js")
+
+        # /run（首次执行）与 /resume（放行续跑）两条长路径都要接
+        assert app.count("startTaskRunPoller(taskId)") >= 2
+
+    def test_逐轮临时卡片用loop_state的轮次(self) -> None:
+        """``execution_results`` 每段循环只写一次，长任务要靠 ``loop_state.rounds`` 才逐步可见。"""
+        source = _read("frontend/js/app.js")
+        body = _function_body(source, "renderRoundCards")
+
+        assert "task.loop_state" in body
+        assert "rounds" in body
+        # 步骤号必须与后端 to_execution_results 一致（loop-{轮次:03d}）→ 终态能就地替换
+        assert "loop-" in body
+        assert "padStart(3, '0')" in body
+        assert "settled" in body
+        # 临时卡片只渲染、不落 transcript
+        assert "renderToolCard(" in body
+        assert "recordEntry" not in body
+
+    def test_轮询渲染会调用逐轮卡片(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "renderProgress")
+
+        assert "renderRoundCards(task)" in body
+
+
+class TestPlanTextBlock:
+    """卡 31：agentic 下「计划」必须看得见。
+
+    此前 ``renderPlanBlock`` 只在 workflow 模式渲染，而 ``EXECUTION_MODE`` 默认就是
+    agentic → 计划块永远不渲染；加上过程块默认收起，用户在整个执行期间只看到
+    「收到，开始执行。」，完全不知道要做什么（黑箱）。
+    """
+
+    def test_有正文计划区块且不入过程块(self) -> None:
+        app = _read("frontend/js/app.js")
+        body = _function_body(app, "renderPlanText")
+
+        assert "plan-text-block" in body
+        # 必须挂到正文（chat-item），不能折进过程块
+        assert "mountChatNode(planTextBlockEl)" in body
+        assert "process-body" not in body
+
+    def test_计划随plan响应与回看重建(self) -> None:
+        app = _read("frontend/js/app.js")
+
+        assert "renderPlanText(result)" in _function_body(app, "applyPlanResult")
+        assert "renderPlanText(task)" in _function_body(app, "applyTaskToView")
+        # 轮询期间也要保持（刷新 / 长任务）
+        assert "renderPlanText(task)" in _function_body(app, "renderProgress")
+
+    def test_重置视图时清掉引用(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "resetActiveView")
+
+        assert "planTextBlockEl = null;" in body
+
+    def test_渲染函数用后端字段(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "renderPlanText")
+
+        assert "task.plan_text" in body
+
+
+class TestFileTypeWiring:
+    """卡 32：产物面板要能一眼分辨文件类型（此前所有文件都是同一个 📄）。"""
+
+    def test_按扩展名给图标与徽标(self) -> None:
+        app = _read("frontend/js/app.js")
+
+        for name in ("fileExtension", "fileTypeIcon", "fileTypeLabel", "shortFileName"):
+            assert f"function {name}(" in app, name
+        assert "FILE_TYPE_ICONS" in app
+        # 类型徽标要真的渲染进文件行
+        body = _function_body(app, "renderFileTree")
+        assert "fileTypeIcon(" in body
+        assert "tree-type" in body
+        # 名字过长也要保留扩展名
+        assert "shortFileName(" in body
+
+    def test_无扩展名不瞎猜(self) -> None:
+        body = _function_body(_read("frontend/js/app.js"), "fileTypeLabel")
+
+        assert "无扩展名" in body
+
+    def test_点开头文件不算扩展名(self) -> None:
+        """.env 的「扩展名」不该被当成 env。"""
+        app = _read("frontend/js/app.js")
+        body = _function_body(app, "fileExtension")
+
+        assert "idx > 0" in body
+
+
+class TestSaveLocationWiring:
+    """卡 33：保存 / 打开要告诉用户**真实落盘位置**（绝对路径）。"""
+
+    def test_记住工作区绝对路径(self) -> None:
+        app = _read("frontend/js/app.js")
+
+        assert "let currentWorkspaceDir" in app
+        assert "currentWorkspaceDir = (data && data.workspace_dir)" in _function_body(
+            app, "renderProjects"
+        )
+
+    def test_有绝对路径助手(self) -> None:
+        app = _read("frontend/js/app.js")
+        body = _function_body(app, "absoluteWorkspacePath")
+
+        assert "currentWorkspaceDir" in body
+        # 不知道工作区时返回空串（不猜）
+        assert "return ''" in body
+
+    def test_查看器与保存都用绝对路径(self) -> None:
+        app = _read("frontend/js/app.js")
+
+        open_body = _function_body(app, "openWorkspaceFile")
+        assert "absoluteWorkspacePath(" in open_body
+
+        save_body = _function_body(app, "handleViewerSave")
+        assert "absoluteWorkspacePath(" in save_body
+        assert "已保存到" in save_body

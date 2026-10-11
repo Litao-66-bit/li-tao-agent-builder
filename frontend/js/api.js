@@ -120,10 +120,11 @@ const api = {
   planTask: (id, useLLM = false, options = {}) =>
     api.request('POST', `/tasks/${id}/plan`, { use_llm: useLLM, ...options }, LLM_TIMEOUT_MS),
   // 柔性主入口：默认直接执行；若计划里有未放行的高风险步骤，后端挂起并返回 pending_approval。
-  runTask: (id, approvedTools = null) =>
+  // wait: false → 立刻返回（后端把循环放到后台线程），前端轮询着边跑边渲染。
+  runTask: (id, approvedTools = null, opts = {}) =>
     api.request(
       'POST',
-      `/tasks/${id}/run`,
+      `/tasks/${id}/run${opts.wait === false ? '?wait=false' : ''}`,
       approvedTools && approvedTools.length ? { approved_tools: approvedTools } : null,
       LLM_TIMEOUT_MS,
     ),
@@ -138,10 +139,10 @@ const api = {
   rejectTask: (id) => api.request('POST', `/tasks/${id}/reject`),
   interruptTask: (id, reason = 'user_stop') => api.request('POST', `/tasks/${id}/interrupt`, { reason }),
   // 到点暂停后放行：携带 approved_tools 逐工具授权；全部放行后才继续执行剩余计划。
-  resumeTask: (id, approvedTools = null) =>
+  resumeTask: (id, approvedTools = null, opts = {}) =>
     api.request(
       'POST',
-      `/tasks/${id}/resume`,
+      `/tasks/${id}/resume${opts.wait === false ? '?wait=false' : ''}`,
       approvedTools && approvedTools.length ? { approved_tools: approvedTools } : null,
       LLM_TIMEOUT_MS,
     ),

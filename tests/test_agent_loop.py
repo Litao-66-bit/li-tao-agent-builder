@@ -753,6 +753,30 @@ class TestRepeatFailureStops:
         assert outcome.stopped_reason == STOP_STAGNANT
         assert len(outcome.rounds) == MAX_REPEAT_FAILURES
 
+    def test_观察被截断时同一动作不算重复失败(self) -> None:
+        """回归（实测任务 89c61c1f）：``test_run`` 的 pytest 原文超过观察窗口，
+        **真正的失败原因落在窗口之外** —— 模型看不到原因，只能重发同一个动作
+        「再要一次」，随即被这道闸门当成原地打转掐死（那次 15 秒收工、测试仍 5 红）。
+
+        口径：上一次同一动作的观察**被截断**时，本轮不计入重复失败（模型是在索取信息）。
+        对照：不截断时仍严格在第 ``MAX_REPEAT_FAILURES`` 次停下（见上一条用例）。
+        """
+        long_output = "x" * 5000  # 会被 _clip_observation 截断
+
+        def _execute(step):
+            return StepOutcome(
+                status="failed",
+                summary="运行测试失败：失败 5 项",
+                error="测试未通过：失败 5 项",
+                observation=long_output,
+                tokens=0,
+            )
+
+        outcome = _run([_search(), _search(), _search(), _finish()], execute=_execute)
+
+        # 不再在第 2 次就掐死；仍受「连续无进展判空转」兜底，所以轮数是有界的。
+        assert len(outcome.rounds) > MAX_REPEAT_FAILURES
+
     def test_失败症状变了就不算重复失败(self) -> None:
         """实测（质量探针 run-1）：R3 的 ``test_run`` 因 ``ImportError``（通过 0 项）失败 →
         模型据此重写了测试文件 → R7 对**同一 target** 再跑，症状变成「通过 2 项、失败 4 项」。

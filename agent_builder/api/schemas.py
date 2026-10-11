@@ -308,7 +308,11 @@ class LoopState(BaseModel):
     )
     stopped_reason: str = Field(default="", description="终止原因：final / budget_steps / …")
     decided_by: str = Field(
-        default="", description="实际拍板者：llm / llm-retry / static / scripted"
+        default="",
+        description=(
+            "实际拍板者：llm / llm-retry / static / scripted / resumed"
+            "（resumed = 用户放行后由 PrefixedDecider 原样重放那一步，本轮无人重新决策）"
+        ),
     )
     final_answer: str = Field(
         default="",
@@ -372,6 +376,18 @@ class TaskResponse(BaseModel):
         description=(
             "待用户放行的高风险步骤 ``{tools, steps}``；非 null 表示任务因高风险动作"
             "挂起（「到点暂停」），等待用户放行或放弃"
+        ),
+    )
+    plan_text: str = Field(
+        default="",
+        description="可读的执行计划（agentic 下由 /plan 生成）；供刷新 / 回看重建计划区块",
+    )
+    running: bool = Field(
+        default=False,
+        description=(
+            "任务是否正在**后台执行**（``POST /run|resume?wait=false``）。"
+            "为 true 时 ``GET /tasks/{id}`` 的结果还在长，前端应继续轮询以边跑边渲染；"
+            "同步执行路径下恒为 false"
         ),
     )
     loop_state: LoopState | None = Field(
@@ -458,6 +474,14 @@ class DecomposeResponse(BaseModel):
     )
     council: dict[str, Any] | None = Field(
         default=None, description="评审会纪要；未开启评审会时为 null"
+    )
+    plan_text: str = Field(
+        default="",
+        description=(
+            "**可读的执行计划**（3~6 条 + 一行「验证：」）。agentic 下没有预分解的 DAG，"
+            "但用户仍需要看得见「打算怎么做」—— 否则整个任务是黑箱。它只用于展示，"
+            "**不冻结执行**（执行仍由模型逐轮决策）。无密钥 / 生成失败时为空串"
+        ),
     )
 
 

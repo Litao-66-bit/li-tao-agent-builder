@@ -1623,6 +1623,39 @@ body {
   padding: 8px 12px;
   background: var(--bg-surface);
 }
+/* 文件树里的类型徽标：让「类型」成为可见信息，而不是只能从名字里猜。 */
+.tree-type {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-surface-2);
+  vertical-align: middle;
+}
+/* 「执行计划」区块：正文、默认展开。色值只用 :root 的语义 token（不得写字面量）。 */
+.plan-text-block {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+}
+.plan-text-label {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--accent);
+  margin-bottom: 3px;
+}
+.plan-text-body {
+  font-size: 13px;
+  color: var(--text-strong);
+  /* 计划是逐条文本（模型会输出换行）→ 保留换行，不要压成一长条。 */
+  white-space: pre-wrap;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .conclusion-label {
   font-size: 11px;
   font-weight: 800;

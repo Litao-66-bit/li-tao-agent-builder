@@ -4,9 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agent Builder</title>
+<!-- 空 data: 图标：没有这一行时浏览器会去请求 /favicon.ico 并留下一条 404 控制台
+     错误，把真正的报错淹掉。 -->
+<link rel="icon" href="data:,">
 <!-- 静态资源版本号（?v=）：改前端资源后请同步 bump 这里的版本号（如 20261008），
      否则浏览器会复用旧缓存（python -m http.server 不发 Cache-Control）。 -->
-<link rel="stylesheet" href="styles.css?v=20261118">
+<link rel="stylesheet" href="styles.css?v=20261011b">
 </head>
 <body>
 
@@ -328,8 +331,8 @@
   </div>
 
   <!-- 先加载 API 封装层，再加载业务逻辑（版本号与上方 styles.css 保持一致） -->
-  <script src="js/api.js?v=20261118"></script>
-  <script src="js/app.js?v=20261118"></script>
+  <script src="js/api.js?v=20261011b"></script>
+  <script src="js/app.js?v=20261011b"></script>
 
 </body>
 </html>

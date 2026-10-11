@@ -45,6 +45,14 @@ def _tmpfix_available() -> bool:
 def _pytest_argv(path: str) -> list[str]:
     """拼 pytest 命令；在受限环境（Windows）下顺带注入临时目录兼容层。"""
     cmd = [sys.executable, "-m", "pytest", path, "-v", "--tb=short"]
+    # **必须关掉 pytest 的缓存插件**（实测任务 8d79faee，2026-10-10）：
+    # cacheprovider 会用 ``tempfile.mkdtemp`` 在 rootdir（= 用户工作区根）建
+    # ``pytest-cache-files-*`` 再 rename 成 ``.pytest_cache``；受限令牌下 mkdtemp 写的
+    # 显式 0o700 权限让 rename 失败（``[WinError 5] 拒绝访问``），于是**每次 test_run
+    # 都在用户工作区留下一个列不出、删不掉、还会显示进产物面板的残留目录**。
+    # 实测：加这个参数 8 → 8（零新增）；不加 8 → 10。
+    # ``no:cacheprovider`` 引用的是 pytest **内置**插件名，永远存在，故可无条件加。
+    cmd += ["-p", "no:cacheprovider"]
     if os.name == "nt" and _tmpfix_available():
         cmd += ["-p", TMPFIX_PLUGIN]
     return cmd

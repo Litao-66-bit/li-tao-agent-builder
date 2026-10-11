@@ -364,6 +364,59 @@ class TestRunnerPermissions:
 # ── 常量 ────────────────────────────────────────────────────────
 
 
+class TestRunner零用例不得判成功:
+    """回归（实测任务 8d79faee，2026-10-10）：``test_run("outputs/paper_agent.py")``
+    一条用例都没收集到（pytest 退出码 5），步骤状态却是 **done**。
+
+    根因：``_PYTEST_COUNT_RE`` 里含 ``warning|warnings``，而零用例时 pytest 9.1.1 打的
+    汇总行是 ``1 warning in 0.01s``（**不是**标准的 ``no tests ran``）→ 解析出
+    ``(0, 0, 0)`` → ``all_passed`` 为真 → 判 done。一次「什么都没测到」的空跑
+    被伪装成「测试通过」，还会被当成有效进展把空转计数清零。
+    """
+
+    def test_只有warning汇总行时判环境失败(self):
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "outputs/paper_agent.py"})
+        out = (
+            "collecting ... collected 0 items\n"
+            "\n"
+            "============================== warnings summary ===============================\n"
+            "  PytestCacheWarning: could not create cache path .pytest_cache\n"
+            "============================= 1 warning in 0.01s ==============================\n"
+        )
+        result = r.execute(step, executor_fn=lambda s: out)
+        assert result.status == "env_failure"
+        assert result.error_msg == UNVERIFIABLE_MSG
+
+    def test_全部skip不算测试通过(self):
+        """一条用例都没**跑**到（全是 skipped）同样不能算通过。"""
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests"})
+        result = r.execute(step, executor_fn=lambda s: "5 skipped in 0.10s")
+        assert result.status == "env_failure"
+        assert result.error_msg == UNVERIFIABLE_MSG
+
+    def test_collected_0_items也判环境失败(self):
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests/nope.py"})
+        result = r.execute(
+            step,
+            executor_fn=lambda s: "collecting ... collected 0 items\n\nno tests ran in 0.01s",
+        )
+        assert result.status == "env_failure"
+
+    def test_正常计数不受影响(self):
+        """改口径不能把「真的有失败」也一起判成环境失败。"""
+        r = _make_runner()
+        step = _make_step("test_run", {"target": "tests"})
+        result = r.execute(
+            step, executor_fn=lambda s: "3 failed, 3 passed, 2 warnings in 0.36s"
+        )
+        assert result.status == "failed"
+        assert result.passed == 3
+        assert result.failed == 3
+
+
 class TestRunnerConstants:
     def test_test_actions_nonempty(self):
         assert len(TEST_ACTIONS) > 0

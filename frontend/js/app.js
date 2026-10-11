@@ -84,6 +84,8 @@ let isSending = false;
 let backendOnline = null;
 // 当前工作区展示文案（右栏 / 状态栏）。
 let currentWorkspaceLabel = '';
+// 当前工作区的**绝对路径**：打开/保存文件时要告诉用户真实落盘位置。
+let currentWorkspaceDir = '';
 
 /* ──────────────── 通用工具 ──────────────── */
 
@@ -367,6 +369,8 @@ let currentProcessBlock = null;
 
 /** 当前结论块（一个任务只保留一条，避免每轮刷新叠出一堆结论）。 */
 let conclusionBlockEl = null;
+// 「执行计划」区块（正文、默认展开、不入过程块）：agentic 下也要看得见计划内容。
+let planTextBlockEl = null;
 
 /** 「思考中」指示条（**不是** chat-item，不占对话裁剪名额；请求在途时显示，收尾即移除）。 */
 let thinkingEl = null;
@@ -574,6 +578,7 @@ function resetActiveView() {
   currentPendingApproval = null;
   currentStopReason = '';
   conclusionBlockEl = null;
+  planTextBlockEl = null;
   lastProcessTask = null;
   thinkingEl = null;
   const log = document.getElementById('chatLog');
@@ -1395,6 +1400,41 @@ function conclusionTone(task) {
   return 'done';
 }
 
+/**
+ * 渲染「执行计划」区块：**放正文、默认展开、不入过程块**。
+ *
+ * 为什么要有（实测 2026-10-11）：agentic 下 ``renderPlanBlock`` 直接短路清空
+ * （它只在 workflow 模式渲染 DAG），而过程块默认收起 —— 用户在整个执行期间
+ * 只看到「收到，开始执行。」，**完全不知道要做什么**（黑箱）。
+ *
+ * 计划文本由后端 ``/plan`` 产出（``plan_text``），**只用于展示、不冻结执行**。
+ * 与结论块一样由后端状态派生、不入 transcript，刷新 / 切任务时重建。
+ */
+function renderPlanText(task) {
+  const text = task && typeof task.plan_text === 'string' ? task.plan_text.trim() : '';
+  if (!text) {
+    if (planTextBlockEl) {
+      planTextBlockEl.remove();
+      planTextBlockEl = null;
+    }
+    return;
+  }
+  if (!planTextBlockEl || !planTextBlockEl.isConnected) {
+    planTextBlockEl = document.createElement('div');
+    planTextBlockEl.className = 'plan-text-block chat-item';
+    const label = document.createElement('div');
+    label.className = 'plan-text-label';
+    label.textContent = '📋 执行计划';
+    const body = document.createElement('div');
+    body.className = 'plan-text-body';
+    planTextBlockEl.appendChild(label);
+    planTextBlockEl.appendChild(body);
+    mountChatNode(planTextBlockEl);
+  }
+  const body = planTextBlockEl.querySelector('.plan-text-body');
+  if (body && body.textContent !== text) body.textContent = text;
+}
+
 /** 渲染/刷新结论块（只渲染，不写会话记录）。
  *
  * 不写 transcript 是刻意的：结论由后端状态派生（``GET /tasks/{id}`` 也带），
@@ -1861,7 +1901,42 @@ async function handleProposalDecision(card, approve) {
 // 折叠中的目录路径：按工作区相对路径记住，重建树（含 ↻ 刷新）时不再被重置。
 const collapsedDirs = new Set();
 
-/** 递归渲染文件树：目录可折叠，文件可点击打开。 */
+// 按扩展名给类型图标：产物面板要能**一眼分辨类型**（此前所有文件都是同一个 📄）。
+const FILE_TYPE_ICONS = {
+  py: '🐍', js: '🟨', mjs: '🟨', ts: '🟦', json: '🧾', md: '📘',
+  html: '🌐', css: '🎨', txt: '📄', toml: '⚙️', ini: '⚙️', cfg: '⚙️',
+  yml: '⚙️', yaml: '⚙️', sh: '🖥️', ps1: '🖥️', bat: '🖥️',
+  sql: '🗃️', csv: '📊', tsv: '📊', log: '📜', lock: '🔒', env: '🔑',
+};
+
+/** 取小写扩展名（无扩展名返回空串；`> 0` 保证 `.env` 这类点开头文件不被当扩展名）。 */
+function fileExtension(name) {
+  const text = String(name || '');
+  const idx = text.lastIndexOf('.');
+  return idx > 0 ? text.slice(idx + 1).toLowerCase() : '';
+}
+
+/** 类型图标；未知扩展名给通用文档图标。 */
+function fileTypeIcon(name) {
+  return FILE_TYPE_ICONS[fileExtension(name)] || '📄';
+}
+
+/** 类型徽标文本（**不猜**：认不出来就说「无扩展名」）。 */
+function fileTypeLabel(name) {
+  return fileExtension(name) || '无扩展名';
+}
+
+/** 文件名过长时**中间省略但保留扩展名** —— 否则连类型都看不出来。 */
+function shortFileName(name, max = 26) {
+  const text = String(name || '');
+  if (text.length <= max) return text;
+  const ext = fileExtension(text);
+  const suffix = ext ? `.${ext}` : '';
+  const keep = Math.max(4, max - suffix.length - 1);
+  return `${text.slice(0, keep)}…${suffix}`;
+}
+
+/** 递归渲染文件树：目录可折叠，文件可点击打开（带类型图标与类型徽标）。 */
 function renderFileTree(nodes, container, depth = 0) {
   nodes.forEach((node) => {
     // 交互一律原生 <button>：可聚焦、Enter/Space 触发、读屏语义都由原生元素提供。
@@ -1891,7 +1966,11 @@ function renderFileTree(nodes, container, depth = 0) {
       const sizeLabel = node.size != null
         ? ` <span class="tree-size">${formatSize(node.size)}</span>`
         : '';
-      row.innerHTML = `📄 ${escapeHtml(node.name)}${sizeLabel}`;
+      // 类型必须**看得见**：图标 + 徽标 + 短名保留扩展名（名字被截断也认得出类型）。
+      const typeLabel = fileTypeLabel(node.name);
+      row.innerHTML = `${fileTypeIcon(node.name)} ${escapeHtml(shortFileName(node.name))}`
+        + `<span class="tree-type">${escapeHtml(typeLabel)}</span>${sizeLabel}`;
+      row.title = `${node.path}\n类型：${typeLabel}`;
       row.addEventListener('click', () => {
         setNavOpen(false); // 窄屏：打开文件后收起抽屉，让对话框完整可见
         openWorkspaceFile(node, row);
@@ -1965,11 +2044,26 @@ function closeFileViewer(force) {
   viewerReturnFocus = null;
 }
 
+/** 工作区相对路径 → 磁盘绝对路径（不知道工作区时返回空串，**不猜**）。
+ *
+ * 为什么要有（实测 2026-10-11）：查看器与保存提示原先全是相对路径，
+ * 用户「保存也不知道把文件保存在哪里」—— 工作区绝对路径只藏在状态栏的 title 里。
+ */
+function absoluteWorkspacePath(relative) {
+  const rel = String(relative || '').replace(/^[\\/]+/, '');
+  if (!currentWorkspaceDir || !rel) return '';
+  const sep = currentWorkspaceDir.includes('\\') ? '\\' : '/';
+  return `${currentWorkspaceDir.replace(/[\\/]+$/, '')}${sep}${rel.replace(/[\\/]+/g, sep)}`;
+}
+
 /** 打开工作区文件：可编辑则显示「保存」；超出可编辑上限则只读截断预览。 */
 async function openWorkspaceFile(node, trigger) {
   showViewer(trigger);
   viewerWorkspacePath = node.path;
-  fileViewerPath.textContent = node.path;
+  // 标题给**磁盘绝对路径**（用户真正需要知道的落盘位置）；相对路径留在 title 里。
+  const absPath = absoluteWorkspacePath(node.path);
+  fileViewerPath.textContent = absPath || node.path;
+  fileViewerPath.title = absPath ? `工作区内路径：${node.path}` : node.path;
   fileViewerMeta.textContent = node.size != null ? formatSize(node.size) : '';
   fileViewerBody.value = '加载中…';
   fileViewerPanel.focus(); // 模态接管焦点（读屏据此播报对话框名称）
@@ -2006,9 +2100,15 @@ async function handleViewerSave() {
   fileViewerSave.disabled = true;
   try {
     const file = await api.writeWorkspaceFile(viewerWorkspacePath, fileViewerBody.value);
-    fileViewerMeta.textContent = `${formatSize(file.size)} · 已保存`;
+    const savedAbs = absoluteWorkspacePath(file.path || viewerWorkspacePath);
+    fileViewerMeta.textContent = savedAbs
+      ? `${formatSize(file.size)} · 已保存到 ${savedAbs}`
+      : `${formatSize(file.size)} · 已保存`;
     setViewerDirty(false);
-    appendMessage('agent', `已保存文件：${file.path}`);
+    // 报告**绝对路径**：这正是用户「不知道保存在哪」缺的那条信息。
+    appendMessage('agent', savedAbs
+      ? `已保存到：${savedAbs}（工作区内路径 ${file.path}）`
+      : `已保存文件：${file.path}`);
   } catch (err) {
     fileViewerMeta.textContent = `保存失败：${err.message}`;
     appendMessage('agent', `❌ 保存失败：${err.message}`);
@@ -2485,15 +2585,26 @@ async function applyPlanResult(taskId, result) {
     appendMessage('agent', '收到，开始执行。');
   }
 
+  // 「先制定方案」：先把可读计划摆出来，再开始执行 —— 用户不必对着黑箱等结果。
+  renderPlanText(result);
+
   // 默认直接跑：自动调用 /run（有未放行高风险步骤时后端会「到点暂停」）。
   // 先乐观置「执行中」：/run 阻塞到跑完才返回，不置位则整段执行期间中断按钮不可点。
   markTaskRunning(taskId);
   showThinking('执行中…（agentic 循环逐轮决定下一步）');
+  let polling = false;
   try {
-    const ran = await api.runTask(taskId);
-    applyRunResult(ran);
+    // wait:false → 后端立刻返回（循环在后台线程跑），随后由轮询器边跑边渲染。
+    const ran = await api.runTask(taskId, null, { wait: false });
+    if (ran && ran.running) {
+      polling = true;
+      startTaskRunPoller(taskId);
+    } else {
+      // 后端同步跑完（或旧后端不支持 wait）→ 走原来的终态渲染。
+      applyRunResult(ran);
+    }
   } finally {
-    hideThinking();
+    if (!polling) hideThinking();
   }
 }
 
@@ -2611,6 +2722,98 @@ function applyRunResult(task) {
   updateTitlebar();
 }
 
+// 后台执行期间的轮询间隔（毫秒）：够快能看见逐步产出，又不至于把后端打爆。
+const RUN_POLL_INTERVAL_MS = 1500;
+let taskRunPoller = null;
+
+/** 后台执行期间用 ``loop_state.rounds`` 画**临时卡片**（只渲染，不写 transcript）。
+ *
+ * ``execution_results`` 只在**每段循环结束时**写一次，长任务在一个循环段内仍会
+ * 「十几秒没动静」—— 实测（2026-10-10）放行续跑那一段就是 14 秒里卡数一动不动，
+ * 到该段结束才一口气冒出 5 张。而 ``loop_state.rounds`` 是**逐轮**增长的，拿它才画得出
+ * 「一步一步在做事」。
+ *
+ * 步骤号与后端 ``to_execution_results`` 完全一致（``loop-{轮次:03d}``）→ 终态
+ * ``execution_results`` 到达时会把同号临时卡片就地替换，不会留重复卡；已经拿到权威
+ * 结果的步骤直接跳过，交给 ``renderExecutionResults``。
+ */
+function renderRoundCards(task) {
+  const rounds = (task.loop_state && task.loop_state.rounds) || [];
+  if (!rounds.length) return 0;
+  const settled = {};
+  for (const item of task.execution_results || []) settled[item.step_id] = true;
+  let added = 0;
+  for (const item of rounds) {
+    const stepId = `loop-${String(item.round).padStart(3, '0')}`;
+    if (settled[stepId]) continue;
+    const decision = item.decision || {};
+    dropPreviousStepNodes(stepId, '.tool-card');
+    renderToolCard(
+      `${stepTitle(stepId, decision.action)} · ${stepId}`,
+      EXEC_STATUS_CLASS[item.status] || 'pending',
+      item.summary || '(执行中…)',
+      { path: stepArtifactPath(item), thought: decision.thought, stepId },
+    );
+    added += 1;
+  }
+  return added;
+}
+
+/** 把后端**当前**进度增量渲染到界面（不追加播报消息，避免每轮刷屏）。
+ *
+ * 背景（实测 2026-10-10，真实浏览器）：`/run` 与 `/resume` 原先**同步阻塞**到整段循环
+ * 跑完才返回，期间界面完全冻结 —— 实测首次执行 12 秒、放行后续跑 22 秒里**一张工具卡
+ * 都不出现**，任务越长冻得越久，直到结束才一次性冒出来 13 张卡 + 结论。
+ * 现在后端以 `wait=false` 立刻返回，本函数按轮次把已完成步骤渲染出来。
+ */
+function renderProgress(task) {
+  if (!task) return;
+  syncTaskStatus(task.task_id, task.status);
+  mergePlanStateFromTask(task);
+  renderPlanBlock(planState);
+  renderPlanText(task);
+  // 先补「还没落成权威结果」的轮次 → 长任务在一个循环段内也能逐步出东西；
+  // 再渲染权威结果（按 step_id 去重）→ 终态会把同号临时卡片就地替换掉。
+  renderRoundCards(task);
+  renderExecutionResults(task);
+  // 到点暂停 / 停下等出口卡片由它按最新状态重建。
+  renderActionSlot(task);
+  refreshProcessBlock(task);
+}
+
+/** 停掉执行轮询器（幂等）。 */
+function stopTaskRunPoller() {
+  if (taskRunPoller) {
+    clearInterval(taskRunPoller);
+    taskRunPoller = null;
+  }
+  hideThinking();
+}
+
+/** 轮询后台执行中的任务：边跑边渲染；跑完（收敛 / 停下 / 到点暂停）做终态渲染后停止。 */
+function startTaskRunPoller(taskId) {
+  stopTaskRunPoller();
+  const tick = async () => {
+    if (!taskId || taskId !== currentTaskId) { stopTaskRunPoller(); return; }
+    let task = null;
+    try {
+      task = await api.getTask(taskId);
+    } catch (err) {
+      stopTaskRunPoller();
+      return;
+    }
+    renderProgress(task);
+    if (task.running) return;   // 后台还在跑 → 下一轮再看
+    stopTaskRunPoller();
+    // 终态：补齐自检 / 进度播报 / 结论，并刷新任务列表与交接提示。
+    applyRunResult(task);
+    await loadTaskSummaries();
+    checkHandover();
+  };
+  taskRunPoller = setInterval(tick, RUN_POLL_INTERVAL_MS);
+  tick();   // 立刻对齐一次，别空等第一个间隔
+}
+
 /** 渲染执行结果卡片（含代码块与「查看产物」入口）。 */
 function renderExecutionResults(task) {
   const results = task.execution_results || [];
@@ -2692,16 +2895,23 @@ async function handleApprovePending(card) {
   // 放行即离开「等待放行」：先乐观置「执行中」（/resume 同样阻塞），中断按钮才可用。
   markTaskRunning(taskId);
   showThinking('继续执行中…');
+  let polling = false;
   try {
-    const task = await api.resumeTask(taskId, tools);
+    // 同上：放行后的续跑同样可能跑很久，改成后台执行 + 轮询。
+    const task = await api.resumeTask(taskId, tools, { wait: false });
     appendMessage('agent', tools.length
       ? `已放行高风险工具：${tools.join('、')}，继续执行…`
       : '已继续执行…');
-    applyRunResult(task);
+    if (task && task.running) {
+      polling = true;
+      startTaskRunPoller(taskId);
+    } else {
+      applyRunResult(task);
+    }
   } catch (err) {
     appendMessage('agent', `❌ 放行失败：${err.message}`);
   } finally {
-    hideThinking();
+    if (!polling) hideThinking();
     if (button) button.disabled = false;
     await loadTaskSummaries();
     checkHandover();
@@ -2819,7 +3029,8 @@ function applyTaskToView(task) {
   }
   renderPlanBlock(planState);
   renderActionSlot(task);
-  // 结论由后端状态派生（不入 transcript）→ 刷新 / 切换任务时在这里重建。
+  // 结论与执行计划都由后端状态派生（不入 transcript）→ 刷新 / 切换任务时在这里重建。
+  renderPlanText(task);
   renderConclusion(task);
   // 执行过程同样由后端派生：只靠本地 transcript 的话，**不是本机跑的任务点开只有一句结论**
   // （卡片、失败原因、产物入口全看不到）。按 step_id 去重，所以与 transcript 的那份不会打架。
@@ -3390,6 +3601,7 @@ function renderProjects(data) {
   const currentId = data && data.current_project_id;
   const current = projects.find((item) => item.project_id === currentId);
   currentWorkspaceLabel = current ? current.name : ((data && data.workspace_dir) || '');
+  currentWorkspaceDir = (data && data.workspace_dir) || '';
   if (workspacePathEl) {
     const label = current ? `${current.name} · ${current.path}` : (data && data.workspace_dir) || '（未知）';
     workspacePathEl.textContent = `工作区 / ${label}`;

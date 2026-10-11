@@ -393,7 +393,19 @@ def _symbol_outline(raw: str, *, max_symbols: int = 40) -> str:
     return symbol_outline(raw, max_symbols=max_symbols)
 
 
-def _clip_observation(raw: Any, *, limit: int = MAX_OBSERVATION_CHARS) -> str:
+# 观察被裁剪时追加的说明前缀：``_clip_observation`` 与 :func:`observation_was_truncated`
+# 共用同一个字面量（后者用于「模型是否只看到了一部分」的判断，见 agent_loop 的重复失败闸门）。
+OBSERVATION_TRUNCATED_MARK = "…（原文 "
+
+
+def observation_was_truncated(text: Any) -> bool:
+    """观察文本是否**被裁剪过**（即模型只看到了原文的一部分）。"""
+    return isinstance(text, str) and OBSERVATION_TRUNCATED_MARK in text
+
+
+def _clip_observation(
+    raw: Any, *, limit: int = MAX_OBSERVATION_CHARS, prefer_tail: bool = False
+) -> str:
     """把上一步的**原始返回**裁成可入提示词的一段（空 / 非字符串 → 空串）。
 
     裁剪时**写明原文长度**：只说「已截断」时，模型不知道自己漏了多少、也不知道
@@ -402,6 +414,13 @@ def _clip_observation(raw: Any, *, limit: int = MAX_OBSERVATION_CHARS) -> str:
     超长时**再附一份全文符号轮廓**（见 :func:`_symbol_outline`）：只多花几百字，
     却让模型立刻知道「哪个类在第几行、签名长什么样」，从而用 ``file_read`` 的
     ``start_line``/``end_line`` 精确取用，而不是把整份文件反复重读。
+
+    Args:
+        prefer_tail: **失败**的观察传 True —— 改成**保尾不保头**。失败的**原因通常写在
+            输出末尾**（pytest 的 short test summary 与 ``E   ...`` 行都在最后），保头会把
+            真正有用的那几行切掉；模型看不到原因只能重发同一个动作「再要一次」，然后被
+            重复失败闸门掐死（实测任务 ``89c61c1f``：R3/R4 是逐字符相同的 ``test_run``，
+            而 R4 的思考写着「需先看清失败详情」）。
     """
     if not isinstance(raw, str):
         return ""
@@ -411,6 +430,15 @@ def _clip_observation(raw: Any, *, limit: int = MAX_OBSERVATION_CHARS) -> str:
     if len(value) > limit:
         total = len(value)
         total_lines = value.count("\n") + 1
+        if prefer_tail:
+            tail = value[-limit:]
+            shown_lines = tail.count("\n") + 1
+            omitted = max(total_lines - shown_lines, 0)
+            return (
+                f"{OBSERVATION_TRUNCATED_MARK}{total} 字 / 共 {total_lines} 行；"
+                f"此处只显示**末尾** {limit} 字（前面约 {omitted} 行已省略"
+                f"—— 失败原因通常在输出末尾）\n{tail}"
+            )
         shown_lines = value[:limit].count("\n") + 1
         outline = _symbol_outline(value)
         value = (
@@ -418,7 +446,8 @@ def _clip_observation(raw: Any, *, limit: int = MAX_OBSERVATION_CHARS) -> str:
             # 说明里必须给**可操作的信息**：看的是哪几行、还剩多少行、下次一段读多大。
             # 实测（用户任务复现 run-2）：模型拿到「已截断」后直接要 start_line=65/end_line=306
             # （241 行 = 8.4k 字），再次超窗被截断，于是又陷入"读不全"的死循环。
-            + f"…（原文 {total} 字 / 共 {total_lines} 行；此处只显示前 {limit} 字，"
+            + f"{OBSERVATION_TRUNCATED_MARK}{total} 字 / 共 {total_lines} 行；"
+            f"此处只显示前 {limit} 字，"
             f"约第 1-{shown_lines} 行。要读后面的内容，请用 file_read 的 "
             f"start_line/end_line **分段**读取，一次不超过 50 行）"
             + outline
@@ -543,10 +572,25 @@ def build_decision_prompt(
             )
             # 只给「摘要」等于让模型盲飞：实测它列完目录仍不知道列到了什么，
             # 只能继续猜参数。这里把工具的真实返回（裁剪后）一并给它。
-            observation = _clip_observation(item.get("observation"))
+            observation = _clip_observation(
+                item.get("observation"), prefer_tail=item.get("status") == "failed"
+            )
             if observation:
-                lines.append("   观察结果：")
-                lines.extend(f"     {line}" for line in observation.splitlines())
+                # 观察内容**逐行第 0 列原样**放进来：**不要**用空白做块缩进。
+                # 实测（任务 8d79faee，2026-10-10）：这里原本是 "     " + 每一行，模型
+                # 照抄内容去构造 file_edit 的 old_string 时把缩进一起抄走（6 行**全部
+                # +4 空格**，两次独立尝试逐字符相同），而 file_edit 要求逐字符相等 →
+                # 连续三次「找不到 old_string」→ 空转判停 stagnant（15/20 步、测试仍
+                # 3 红，而模型的诊断每一步都是对的）。
+                # 结论：边界只能用定界符表达；缩进必须保持原文，不得再做任何排版。
+                lines.append("观察结果：")
+                lines.append(
+                    "（以下为工具原文，逐行原样、未做任何额外缩进；"
+                    "构造 old_string 时必须逐字符复制，含缩进与空行）"
+                )
+                lines.append("<observation>")
+                lines.extend(observation.splitlines())
+                lines.append("</observation>")
         lines.append("（每轮的「观察结果」是工具的真实返回，据此决定下一步，不要重复已做过的动作。）")
     else:
         lines.append("已完成：无（这是第一步）")
@@ -688,6 +732,7 @@ __all__ = [
     "KIND_INVALID",
     "KIND_PROPOSE",
     "KIND_TOOL",
+    "OBSERVATION_TRUNCATED_MARK",
     "PROPOSAL_NAME_RE",
     "PROPOSAL_RISKS",
     "PROPOSAL_TARGETS",
@@ -699,6 +744,7 @@ __all__ = [
     "RouteDecider",
     "ScriptedDecider",
     "build_decision_prompt",
+    "observation_was_truncated",
     "parse_decision",
     "static_fallback",
     "validate_decision",

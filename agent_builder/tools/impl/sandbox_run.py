@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from agent_builder.contracts.errors import tool_error, validation_error
-from agent_builder.tools.gatekeeper import workspace_temp_env
+from agent_builder.tools.gatekeeper import current_workspace_dir, workspace_temp_env
 from agent_builder.tools.registry import current_correlation_id, registry
 from agent_builder.tools.spec import ToolSpec
 
@@ -89,6 +89,16 @@ def run_command(command: str, *, path: str = "", timeout: float = DEFAULT_TIMEOU
     # 去找解释器）。这里把当前解释器所在目录前置进 PATH，与 ``test_run``「用同一个解释器」
     # 的口径一致：不用用户改 PATH，也不会挑到另一个 Python 环境。
     env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+    # 子进程输出编码**两侧成对锁死**（与 test_run 的卡 D 同口径）。
+    # 实测（任务 168760c4，2026-10-10）：后端带 ``PYTHONIOENCODING=utf-8`` 启动时子进程写
+    # UTF-8，而 ``text=True`` 不指定编码会按**本地编码（gbk）**解码 → 读线程抛
+    # UnicodeDecodeError → ``proc.stdout`` / ``proc.stderr`` 变成 **None**：
+    #   * stdout=None → ``len(output)`` 抛 TypeError，被 registry 包成
+    #     「工具 'sandbox_run' 参数非法: object of type 'NoneType' has no len()」（模型看不懂）；
+    #   * stderr=None → ``if proc.stderr:`` 为假 → 报错里只剩「命令退出码 N」、**丢掉全部输出**
+    #     （模型只能盲重试；实测那一轮 sandbox_run 连撞 5 次）。
+    # agent 生成的脚本几乎必然输出中文，所以这条会稳定踩到。
+    env["PYTHONIOENCODING"] = "utf-8"
     # 临时目录同样要在工作区内可写（否则被测代码/脚本里用 tempfile 必报 PermissionError）。
     workspace_temp_env(env)
 
@@ -96,10 +106,20 @@ def run_command(command: str, *, path: str = "", timeout: float = DEFAULT_TIMEOU
     kwargs: dict = {
         "capture_output": True,
         "text": True,
+        # 读侧固定 utf-8 + errors=replace，与上面写侧的 PYTHONIOENCODING 成对。
+        "encoding": "utf-8",
+        "errors": "replace",
         "timeout": timeout,
     }
-    if path:
-        kwargs["cwd"] = path
+    # cwd **必须**落在当前工作区：缺省成**进程 cwd** 会让相对路径命令跑到产品仓库里去。
+    # 实测（任务 168760c4，2026-10-10）：后端按文档用仓库根启动，而仓库 ``outputs/`` 下
+    # 恰好有一份**同名诱饵** ``outputs/paper_agent.py`` —— agent 写在工作区的那份被绕过，
+    # 跑的是仓库里的旧文件：报错原文（``required: --topic`` / ``unrecognized arguments:
+    # --json``）与诱饵的 argparse 完全一致，而同一任务的 ``file_read`` 读的是工作区那份，
+    # 即**读的对象 ≠ 跑的对象**（5 次 sandbox_run 全废，模型只能盲重试）。
+    # 这与 ``test_run`` 的 target 按工作区解析是同一类缺陷（见其 §卡 1），口径必须一致。
+    workspace = current_workspace_dir.get() or Path.cwd()
+    kwargs["cwd"] = str(path) if path else str(workspace)
     # Linux: 创建无网络命名空间（unshare CLONE_NEWNET）。
     if sys.platform != "win32":
         kwargs["preexec_fn"] = _network_sandbox_preexec

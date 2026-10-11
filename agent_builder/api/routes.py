@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
+import threading
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -124,14 +126,63 @@ MAX_TREE_DEPTH = 8
 # 可编辑上限：不超过此大小 → 返回全文，可编辑并保存。
 MAX_EDITABLE_BYTES = 2 * 1024 * 1024
 
+# 可读执行计划的长度上限（只是给人看的摘要，不该长篇大论）。
+MAX_PLAN_TEXT_CHARS = 1200
+
+logger = logging.getLogger(__name__)
+
+_PLAN_TEXT_PROMPT = """你是执行编排的规划助手。请用**中文**给出一份简短、可核对的执行计划，
+让用户在开始执行之前一眼看懂「你打算做什么」。
+
+要求：
+1. 3~6 条，每条一行，用「1. 」「2. 」这样的序号开头；
+2. 每条写清「做什么 + 产出什么文件」，能确定就写文件路径；不要写空话套话；
+3. 最后单独一行以「验证：」开头，说明打算怎么证明做成了（跑什么、看什么）；
+4. 只输出计划本身：不要前后客套、不要 markdown 代码块、不要重复需求原文。
+
+【需求】
+{requirement}"""
+
+
+def _trim_plan_text(text: Any) -> str:
+    """清洗计划文本：剥掉代码块围栏、去掉首尾空白、限长。"""
+    value = str(text or "").strip()
+    if value.startswith("```"):
+        value = "\n".join(
+            line for line in value.splitlines() if not line.strip().startswith("```")
+        ).strip()
+    return value[:MAX_PLAN_TEXT_CHARS]
+
+
+def _draft_plan_text(requirement: str, llm_client: Any) -> str:
+    """让模型给一份**可读的执行计划**（只用于展示，不冻结执行）。
+
+    为什么需要（实测 2026-10-11）：agentic 下 ``/plan`` 不跑 Decomposer、前端又只在
+    workflow 模式渲染计划块 → 用户在整个执行期间只看到「收到，开始执行。」，
+    完全不知道要做什么（黑箱）。
+
+    无可用客户端 / 调用失败 / 返回空 → **一律返回空串，绝不影响任务创建**
+    （计划文本是锦上添花，不能拖垮主流程）。
+    """
+    if llm_client is None:
+        return ""
+    try:
+        text = llm_client.chat(
+            [{"role": "user", "content": _PLAN_TEXT_PROMPT.format(requirement=requirement)}]
+        )
+    except Exception:  # 展示用信息，失败只记日志
+        logger.warning("生成可读执行计划失败（忽略）", exc_info=True)
+        return ""
+    return _trim_plan_text(text)
+
 
 def _resolve_workspace_dir() -> Path:
     """解析当前工作区目录。
 
     工作区由「当前项目」决定（见 agent_builder/api/projects.py）：
     - 未切换过项目 → 默认工作区项目（gatekeeper.WORKSPACE_DIR，不存在则项目根）；
-    - 已切换项目且目录仍有效 → 该项目目录；
-    - 项目目录已失效 → 回退默认工作区，保证接口始终可用。
+    - 已切换项目 → 该项目目录（目录失效也**如实返回它自己**，不再偷偷换成别的目录，
+      见 :meth:`ProjectStore.current_workspace_dir`）。
     """
     return get_project_store().current_workspace_dir()
 
@@ -278,6 +329,8 @@ def _to_task_response(entry_or_conductor: Any, task_id: str) -> TaskResponse:
         council=council,
         title=getattr(entry_or_conductor, "title", "") or "",
         pending_approval=getattr(entry_or_conductor, "pending_approval", None),
+        running=bool(getattr(entry_or_conductor, "running", False)),
+        plan_text=getattr(entry_or_conductor, "plan_text", "") or "",
         loop_state=getattr(entry_or_conductor, "loop_state", None),
         pending_proposal=getattr(entry_or_conductor, "pending_proposal", None),
         proposals=getattr(entry_or_conductor, "proposals", None) or [],
@@ -492,12 +545,24 @@ def create_project(req: ProjectCreateRequest) -> ProjectResponse:
     dependencies=[Depends(require_local_client)],
 )
 def open_project(project_id: str) -> ProjectResponse:
-    """切换到已登记的项目（project_id="default" 即内置默认工作区）。"""
-    try:
-        project = get_project_store().open(project_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}") from exc
-    return ProjectResponse(**asdict(project))
+    """切换到已登记的项目（project_id="default" 即内置默认工作区）。
+
+    **切换之前**必须校验目录仍存在：实测（2026-10-10）不校验时 ``/open`` 会返回 200
+    把一个**已被删除**的项目置为当前，随后 ``current_workspace_dir()`` 静默回退到
+    ``default_workspace_dir()``（= **产品自己的源码根**）—— 「打开一个死项目」于是
+    变成「读写产品源码」，而同一个 ``/projects`` 响应里 ``current_project_id``
+    （死项目）与 ``workspace_dir``（产品仓库）还互相矛盾。
+    """
+    store = get_project_store()
+    existing = store.get(project_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
+    if not Path(existing.path).is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"项目目录已不存在：{existing.path}（请重新选择工作区）",
+        )
+    return ProjectResponse(**asdict(store.open(project_id)))
 
 
 @router.get(
@@ -802,6 +867,18 @@ def plan_task(
             raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # 「先制定方案」：**agentic 也要有一份看得见的计划**，否则用户面对的是黑箱
+        # （实测：整个执行期间对话区只有「收到，开始执行。」+ 一行折叠摘要）。
+        # 它只用于展示，不冻结执行 —— 执行仍由模型逐轮决策（保持「规划去工作流化」）。
+        entry.plan_text = _draft_plan_text(
+            entry.requirement,
+            llm_client
+            or get_llm_client(
+                model=req.model,
+                temperature=req.temperature,
+                role_brief_mode=req.role_brief,
+            ),
+        )
         _record_usage(entry, plan_usage, mode=req.role_brief)
         status = conductor.task_state.status
         return DecomposeResponse(
@@ -809,6 +886,7 @@ def plan_task(
             status=status.value if hasattr(status, "value") else str(status),
             mode=req.mode,
             council=entry.council,
+            plan_text=entry.plan_text,
         )
 
     decomposer = Decomposer(correlation_id=task_id)
@@ -1091,16 +1169,10 @@ def _decision_from(payload: LoopDecision) -> Decision:
     )
 
 
-def _loop_state_from(
-    outcome: LoopOutcome,
-    budget: LoopBudget,
-    context: LoopContext,
-    *,
-    base_rounds: list[LoopRoundResult] | None = None,
-) -> LoopState:
-    """构造循环上下文快照（累积历轮，供回看 / 审计 / ``/resume`` 续跑）。"""
-    rounds = list(base_rounds or [])
-    rounds.extend(
+def _rounds_payload(rounds: Any, base_rounds: list[LoopRoundResult] | None = None) -> list:
+    """把循环轮次转成 ``LoopRoundResult`` 列表（可叠加此前段落已完成的轮次）。"""
+    payload: list[LoopRoundResult] = list(base_rounds or [])
+    payload.extend(
         LoopRoundResult(
             round=item.round_index,
             decision=_loop_decision(item.decision),
@@ -1109,8 +1181,49 @@ def _loop_state_from(
             artifacts=list(item.artifacts),
             tokens=item.tokens,
         )
-        for item in outcome.rounds
+        for item in rounds
     )
+    return payload
+
+
+def _publish_live_progress(
+    entry: Any,
+    rounds: Any,
+    context: LoopContext,
+    budget: LoopBudget,
+    *,
+    base_rounds: list[LoopRoundResult] | None = None,
+) -> None:
+    """把**当前已完成**的轮次写进 entry，供前端轮询时边跑边渲染。
+
+    为什么必须做（实测 2026-10-10，真实浏览器）：``steps`` / ``execution_results`` /
+    ``loop_state`` 原先都是 ``run_agent_loop`` **返回之后**才写的，于是循环段内
+    ``GET /tasks/{id}`` 什么都看不到 —— 前端即便轮询也无内容可画（实测某段 14 秒里
+    工具卡恒为 2 张，直到该段结束才一口气冒出 5 张）。这里每完成一轮刷新一次。
+    """
+    entry.loop_state = LoopState(
+        rounds=_rounds_payload(rounds, base_rounds),
+        artifacts=list(context.artifacts),
+        budget=LoopBudgetState(
+            steps_used=budget.steps_used,
+            max_steps=budget.max_steps,
+            tokens_used=budget.tokens_used,
+            max_tokens=budget.max_tokens,
+            stagnant_rounds=budget.stagnant_rounds,
+            max_stagnant_rounds=budget.max_stagnant_rounds,
+        ),
+    )
+
+
+def _loop_state_from(
+    outcome: LoopOutcome,
+    budget: LoopBudget,
+    context: LoopContext,
+    *,
+    base_rounds: list[LoopRoundResult] | None = None,
+) -> LoopState:
+    """构造循环上下文快照（累积历轮，供回看 / 审计 / ``/resume`` 续跑）。"""
+    rounds = _rounds_payload(outcome.rounds, base_rounds)
     return LoopState(
         rounds=rounds,
         artifacts=list(context.artifacts),
@@ -1239,6 +1352,11 @@ def _execute_plan_agentic(
         # 「用户中断」落地：/interrupt 把状态翻成 interrupted，同步阻塞的循环在
         # 每个轮次边界据此退出 —— 否则点了「⏸ 中断」界面变「已暂停」、后台却还在跑。
         should_stop=lambda: conductor.task_state.status is TaskStatus.INTERRUPTED,
+        # 每完成一轮就刷新一次 entry.loop_state：前端轮询才有东西可画（长任务不再
+        # 「一整段没动静」）。终态仍由下面的 _loop_state_from 覆盖成完整快照。
+        on_round=lambda rounds: _publish_live_progress(
+            entry, rounds, context, budget, base_rounds=base_rounds
+        ),
     )
 
     # 落步骤（``GET /tasks/{id}`` 的 steps，回看用）+ 执行结果（复用现有卡片渲染）。
@@ -1414,10 +1532,48 @@ def reject_proposal(
     return _decide_proposal(entry, task_id, approve=False)
 
 
+def _assert_not_running(entry: Any, task_id: str) -> None:
+    """同一任务不允许并发起两次后台执行（否则两个线程会同时改同一份任务状态）。"""
+    if getattr(entry, "running", False):
+        raise HTTPException(
+            status_code=409,
+            detail=f"任务正在执行中，请等它结束或先中断：{task_id}",
+        )
+
+
+def _start_background_execution(entry: Any, task_id: str, approved_tools: set[str]) -> None:
+    """把「跑循环」那段放到后台线程，**立刻**把控制权还给请求。
+
+    为什么需要（实测 2026-10-10，真实浏览器）：``/run`` / ``/resume`` 原先同步阻塞到整段
+    agentic 循环跑完才返回，期间前端**完全收不到任何东西** —— 实测首次执行冻结 12 秒、
+    放行续跑冻结 22 秒，工具卡一张都不出现，直到结束才一次性冒出来（13 张卡 + 结论）。
+    任务越长冻得越久，而循环本身是逐轮更新的（``GET /tasks/{id}`` 在请求进行中就能看到
+    ``loop_state.rounds`` 增长）—— 所以只要不阻塞请求，前端就能轮询着边跑边渲染。
+    """
+    entry.running = True
+
+    def _worker() -> None:
+        try:
+            _execute_plan(entry, task_id, approved_tools)
+        except Exception:  # 后台线程：异常必须落日志，不能静默消失
+            logger.exception("后台执行任务失败：%s", task_id)
+        finally:
+            entry.running = False
+
+    threading.Thread(target=_worker, name=f"task-run-{task_id[:8]}", daemon=True).start()
+
+
 @router.post("/tasks/{task_id}/run", response_model=TaskResponse)
 def run_task(
     task_id: str,
     req: TaskApproveRequest | None = None,
+    wait: bool = Query(
+        True,
+        description=(
+            "true（默认）= 同步跑到本次循环结束再返回；"
+            "false = 立刻返回（``running=true``），执行放到后台线程，前端据此边跑边渲染"
+        ),
+    ),
     store: InMemoryTaskStore = Depends(get_store),
 ) -> TaskResponse:
     """直接执行（**不强制前置确认**；用户可随时中断）。
@@ -1435,6 +1591,7 @@ def run_task(
     entry = store.get(task_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    _assert_not_running(entry, task_id)
     if entry.conductor.task_state.status is TaskStatus.PLANNING:
         _mark_plan_ready(entry, task_id)
 
@@ -1462,7 +1619,10 @@ def run_task(
         return _pause_for_high_risk(entry, task_id)
 
     entry.pending_approval = None
-    _execute_plan(entry, task_id, entry.approved_tools)
+    if wait:
+        _execute_plan(entry, task_id, entry.approved_tools)
+    else:
+        _start_background_execution(entry, task_id, entry.approved_tools)
     return _to_task_response(entry, task_id)
 
 
@@ -1556,6 +1716,13 @@ def interrupt_task(
 def resume_task(
     task_id: str,
     req: TaskResumeRequest | None = None,
+    wait: bool = Query(
+        True,
+        description=(
+            "true（默认）= 同步跑到本次循环结束再返回；"
+            "false = 立刻返回（``running=true``），执行放到后台线程，前端据此边跑边渲染"
+        ),
+    ),
     store: InMemoryTaskStore = Depends(get_store),
 ) -> TaskResponse:
     """用户恢复 → 状态转 EXECUTING。
@@ -1571,6 +1738,7 @@ def resume_task(
     entry = store.get(task_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
+    _assert_not_running(entry, task_id)
     paused_for_approval = entry.pending_approval is not None
     try:
         entry.conductor.handle_resume()  # INTERRUPTED → EXECUTING
@@ -1588,14 +1756,20 @@ def resume_task(
     # 模型动态生成的，计划里本就没有一份可预先扫描的清单。
     if entry.options.get("mode", "agentic") == "agentic" and entry.loop_state is not None:
         entry.pending_approval = None
-        _execute_plan(entry, task_id, entry.approved_tools)
+        if wait:
+            _execute_plan(entry, task_id, entry.approved_tools)
+        else:
+            _start_background_execution(entry, task_id, entry.approved_tools)
         return _to_task_response(entry, task_id)
 
     if _pending_high_risk(entry) is not None:
         return _pause_for_high_risk(entry, task_id)
 
     entry.pending_approval = None
-    _execute_plan(entry, task_id, entry.approved_tools)
+    if wait:
+        _execute_plan(entry, task_id, entry.approved_tools)
+    else:
+        _start_background_execution(entry, task_id, entry.approved_tools)
     return _to_task_response(entry, task_id)
 
 

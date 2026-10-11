@@ -59,7 +59,13 @@ Agent Builder 已注册工具一览。所有工具经 `ToolGatekeeper` 唯一出
 
 ### 可选路径校验（sandbox_run）
 `sandbox_run` 的 `path` 参数（可选）经 `ToolGatekeeper._check_sandbox_path_optional` 校验：
-存在则校验沙箱，不存在则跳过（用默认工作目录）。
+存在则校验沙箱，不存在则跳过。
+
+**不传 `path` 时子进程 `cwd` = 当前工作区**（`current_workspace_dir`；无上下文才退回进程 cwd）。
+这是硬要求（实测任务 168760c4，2026-10-10）：缺省成**进程 cwd**（= 后端启动目录 = 产品仓库）时，
+相对路径命令会命中仓库里的**同名文件**，agent 写在工作区的那份被绕过 ——
+报错与仓库诱饵的 argparse 完全一致，而同一次任务的 `file_read` 读的是工作区那份，
+即**读的对象 ≠ 跑的对象**。与 `test_run` 的 target 按工作区解析同口径（见本文档 test_run 一节）。
 
 ### 混合校验（test_run）
 `test_run` 的 `target` 参数经 `ToolGatekeeper._check_target_safety` 混合校验：

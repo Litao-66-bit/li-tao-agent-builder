@@ -559,7 +559,14 @@ def _unproduced_note(missing: list[str], produced: list[str]) -> str:
 # 「验证证据：1) pytest 运行 tests/test_research_agent.py，5 项全部通过」，
 # 中间隔着路径与逗号，卡 6 字以内会漏判、事实行附不上。
 # `未通过` / `不通过` 属如实汇报，不算声明（否则如实失败反而被加事实行）。
-_CLAIM_VERIFY_RE = re.compile(r"(?:验证|测试|校验)[^。；\n]*(?<![未不])(?:通过|成功)")
+#
+# 第二种写法：模型**直接贴出 pytest 的成功计数**（如「7 passed in 0.02s」）。
+# 实测（2026-10-10，任务 e55af7b1）结论里写的正是这种具体证据，而不是「验证通过」
+# 这类中文措辞 —— 只认中文时事实行**根本没附上**，核对功能等于没生效。
+# 要求 ≥1 项 passed：`0 passed` 不是成功声明。
+_CLAIM_VERIFY_RE = re.compile(
+    r"(?:验证|测试|校验)[^。；\n]*(?<![未不])(?:通过|成功)" r"|\b[1-9]\d*\s+passed\b"
+)
 
 
 def _claims_verification(text: str) -> bool:
@@ -567,21 +574,42 @@ def _claims_verification(text: str) -> bool:
     return bool(_CLAIM_VERIFY_RE.search(text or ""))
 
 
+# 事实行里两类执行动作的展示名（顺序即报告顺序）。
+_EXEC_LABELS: tuple[tuple[str, str], ...] = (("test_run", "测试"), ("sandbox_run", "命令"))
+
+
 def _verification_fact(results: list[Mapping[str, Any]]) -> str:
     """后端核对出的**验证证据** —— 替代模型自己写的「验证通过」。
 
     模型可以在结论里写「验证通过」，但那只是它的自述：实机产出的 ``verify()``
     就是 ``bool(self.plan.steps) and bool(self.code_artifact)`` 这种**自证式**判断
-    （检查容器非空即算通过）。这里只认**真实运行过**的执行类动作及其真实状态：
-    跑过几次、成了几次；一次都没跑过就如实说明「验证」只是代码内的自述。
+    （检查容器非空即算通过）。这里只认**真实运行过**的执行类动作及其真实状态。
+
+    **测试与命令必须分开报**（实测 2026-10-10，任务 ``168760c4``）：结论写
+    「pytest 7 项全部通过」，而事实行原先把两类混在一起数，输出成
+    「真实运行 9 次，成功 1 次、失败 8 次」—— 读起来像「验证基本失败」，与它要佐证的
+    那句话自相矛盾（那 8 次失败全是 ``sandbox_run`` 的试错，与 pytest 无关）。
+    另给出**最近一次**的结果：只报总数容易被历史失败带偏。
     """
     runs = [item for item in results if str(item.get("action") or "") in _EXEC_ACTIONS]
     if not runs:
         return "（系统核对：本次未真实运行任何测试或命令，「验证」仅为代码内的自述）"
-    done = sum(1 for item in runs if str(item.get("status") or "") == "done")
-    detail = f"真实运行 {len(runs)} 次，成功 {done} 次"
-    if len(runs) - done:
-        detail += f"、失败 {len(runs) - done} 次"
+    parts: list[str] = []
+    for action, label in _EXEC_LABELS:
+        group = [item for item in runs if str(item.get("action") or "") == action]
+        if not group:
+            continue
+        done = sum(1 for item in group if str(item.get("status") or "") == "done")
+        item = f"{label}运行 {len(group)} 次"
+        if done:
+            item += f"、成功 {done} 次"
+        if len(group) - done:
+            item += f"、失败 {len(group) - done} 次"
+        parts.append(item)
+    detail = "；".join(parts)
+    latest = str(runs[-1].get("status") or "")
+    if latest:
+        detail += f"；最近一次{'成功' if latest == 'done' else '失败'}"
     return f"（系统核对：{detail}）"
 
 

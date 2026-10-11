@@ -333,15 +333,37 @@ class TestWorkspaceTempEnv:
         assert env["PYTEST_DEBUG_TEMPROOT"] == str(tmp_path / ".agent-tmp" / "pytest")
 
     def test_导入不了插件就绝不加_p(self, monkeypatch):
-        """插件 import 不到时加 ``-p`` 会让 pytest 直接报错退出 —— 必须退回原始命令。"""
+        """插件 import 不到时加 ``-p`` 会让 pytest 直接报错退出 —— 必须退回原始命令。
+
+        注意 ``-p no:cacheprovider`` **不受此限**：它引用的是 pytest **内置**插件名
+        （永远存在、不可能 import 失败），而且必须**无条件**加 —— 见
+        ``test_必须关掉pytest缓存插件``。这里钉住的保护意图是
+        「**tmpfix 插件**拿不到就绝不能加它」。
+        """
         import agent_builder.tools.impl.test_run as tr
 
         monkeypatch.setattr(tr, "_tmpfix_available", lambda: False)
 
         argv = tr._pytest_argv("tests/test_x.py")
 
-        assert "-p" not in argv
+        assert tr.TMPFIX_PLUGIN not in argv
         assert argv[:4] == [tr.sys.executable, "-m", "pytest", "tests/test_x.py"]
+        assert argv[-2:] == ["-p", "no:cacheprovider"]
+
+    def test_必须关掉pytest缓存插件(self):
+        """回归（实测任务 8d79faee，2026-10-10）：cacheprovider 会在**用户工作区根**
+        用 mkdtemp 建 ``pytest-cache-files-*`` 再 rename 成 ``.pytest_cache``；
+        受限令牌下 mkdtemp 的显式 0o700 权限让 rename 失败（``[WinError 5]``），
+        于是每次 test_run 都在工作区留下一个**列不出、删不掉**的残留目录
+        （还会被列进产物面板）。
+
+        实测口径：加 ``-p no:cacheprovider`` 后 8 → 8（零新增）；不加 8 → 10。
+        """
+        import agent_builder.tools.impl.test_run as tr
+
+        argv = tr._pytest_argv("tests/test_x.py")
+
+        assert "no:cacheprovider" in argv
 
 
 

@@ -381,7 +381,8 @@ class TestConclude:
         ]
         answer = "已写出 a.py，验证通过"
         assert conclude(final_answer=answer, execution_results=results) == (
-            "已写出 a.py，验证通过（系统核对：真实运行 2 次，成功 1 次、失败 1 次）"
+            "已写出 a.py，验证通过"
+            "（系统核对：测试运行 2 次、成功 1 次、失败 1 次；最近一次失败）"
         )
 
     def test_没有真实运行时点明验证只是自述(self):
@@ -391,6 +392,20 @@ class TestConclude:
             "已写出 a.py，测试全部通过"
             "（系统核对：本次未真实运行任何测试或命令，「验证」仅为代码内的自述）"
         )
+
+    def test_直接贴出pytest成功计数也算声明(self):
+        """实测（2026-10-10，任务 e55af7b1）：结论写「pytest 运行 …：7 passed in 0.02s」，
+        只认中文措辞时事实行根本没附上 —— 核对功能等于没生效。"""
+        results = [{"action": "test_run", "status": "done", "artifacts": []}]
+        answer = "验证证据：pytest 运行 outputs/test_paper_agent.py：7 passed in 0.02s"
+        assert conclude(final_answer=answer, execution_results=results) == (
+            answer + "（系统核对：测试运行 1 次、成功 1 次；最近一次成功）"
+        )
+
+    def test_零项passed不算成功声明(self):
+        results = [{"action": "test_run", "status": "failed", "artifacts": []}]
+        answer = "跑了一遍：0 passed, 3 failed"
+        assert conclude(final_answer=answer, execution_results=results) == answer
 
     def test_如实汇报未通过时不加系统事实行(self):
         """「测试未通过」是如实汇报，不是验证声明，不该被加事实行。"""
@@ -404,8 +419,26 @@ class TestConclude:
         results = [{"action": "test_run", "status": "done", "artifacts": []}]
         answer = "验证证据：1) pytest 运行 tests/test_research_agent.py，5 项全部通过"
         assert conclude(final_answer=answer, execution_results=results) == (
-            answer + "（系统核对：真实运行 1 次，成功 1 次）"
+            answer + "（系统核对：测试运行 1 次、成功 1 次；最近一次成功）"
         )
+
+    def test_测试与命令分开报不互相抹黑(self):
+        """实测（2026-10-10，任务 168760c4）：结论写「pytest 7 项全部通过」，事实行原先把
+        测试与命令混在一起数，输出成「真实运行 9 次，成功 1 次、失败 8 次」—— 读起来像
+        「验证基本失败」，与它要佐证的那句话自相矛盾（那 8 次失败全是 sandbox_run 试错）。"""
+        results = (
+            [{"action": "test_run", "status": "failed", "artifacts": []} for _ in range(3)]
+            + [{"action": "sandbox_run", "status": "failed", "artifacts": []} for _ in range(8)]
+            + [{"action": "test_run", "status": "done", "artifacts": []}]
+        )
+        answer = "已产出实现与测试，pytest 运行 7 项全部通过"
+        out = conclude(final_answer=answer, execution_results=results)
+
+        assert "测试运行 4 次、成功 1 次、失败 3 次" in out
+        assert "命令运行 8 次、失败 8 次" in out
+        assert "最近一次成功" in out
+        # 旧口径「真实运行 N 次」把两类混在一起，必须彻底消失
+        assert "真实运行" not in out
 
     def test_有产物时不加事实说明(self):
         results = [{"status": "done", "artifacts": ["agents/research_agent.py"]}]

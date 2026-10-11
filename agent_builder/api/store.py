@@ -56,6 +56,10 @@ class TaskEntry:
         proposals: 提议历史（含已批准 / 已拒绝），供回看与审计。
         pending_scaffold: 与 ``pending_proposal`` 配套的**待落盘内容**（相对路径 → 内容），
             在提议浮出时就算好 —— 批准时写入的就是用户在卡片上预览过的那份。
+        running: 是否正在**后台执行**（``POST /run|resume?wait=false`` 起的后台线程）。
+            前端据此判断「还要不要继续轮询」；同步执行路径下恒为 False。
+        plan_text: **可读的执行计划文本**（agentic 下也产出，3~6 条 + 一行「验证：」）。
+            ``mode=workflow`` 时它为空 —— 那时前端渲染的是 DAG 计划块。
     """
 
     conductor: Conductor
@@ -78,6 +82,8 @@ class TaskEntry:
     pending_proposal: ProposalView | None = None
     proposals: list[ChangeProposal] = field(default_factory=list)
     pending_scaffold: dict[str, str] | None = None
+    running: bool = False
+    plan_text: str = ""
 
 
 class InMemoryTaskStore:

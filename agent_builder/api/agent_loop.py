@@ -30,6 +30,7 @@ from agent_builder.api.deciders import (
     LoopContext,
     RouteDecider,
     _clip_observation,
+    observation_was_truncated,
     static_fallback,
     validate_decision,
 )
@@ -309,6 +310,7 @@ def run_agent_loop(
     budget: LoopBudget | None = None,
     start_index: int = 0,
     should_stop: Callable[[], bool] | None = None,
+    on_round: Callable[[list[LoopRound]], None] | None = None,
 ) -> LoopOutcome:
     """跑一轮 agentic 循环。
 
@@ -324,6 +326,9 @@ def run_agent_loop(
             ``stopped_reason=STOP_INTERRUPTED``。这是「用户中断」的落地方式：
             状态机已把任务翻成 ``interrupted``，循环在下一个轮次边界观察到并退出，
             不再决策 / 不再执行工具。默认 None（不检查）。
+        on_round: 可选回调，**每完成一轮**调用一次，参数是本次循环已完成的轮次列表。
+            调用方据此把进度**边跑边**发布出去（``POST /run?wait=false`` + 前端轮询），
+            否则长任务在一个循环段内界面上什么都看不到（实测 2026-10-10）。默认 None。
 
     Returns:
         :class:`LoopOutcome`：历轮记录 + 终止原因 + 待放行决策（若有）。
@@ -335,6 +340,8 @@ def run_agent_loop(
     decided_by = decider.name
     # 「动作 + 参数」→ 已失败次数（识别反复无效的重试，见 MAX_REPEAT_FAILURES）。
     failed_attempts: dict[tuple[str, str], int] = {}
+    # 「动作 + 参数」→ 上一次的观察是否**被截断**（见下面的重复失败闸门豁免）。
+    truncated_attempts: dict[str, bool] = {}
 
     while True:
         # 用户中断优先于预算：状态机已翻成 interrupted → 立刻退出，不再产出新步骤。
@@ -418,7 +425,9 @@ def run_agent_loop(
         step = to_step(decision, round_index=start_index + len(rounds) + 1)
         outcome = execute(step)
         # 工具原始返回只留一份给提示词（裁剪后）；前端仍只看 summary。
-        observation = _clip_observation(outcome.observation)
+        observation = _clip_observation(
+            outcome.observation, prefer_tail=outcome.status == "failed"
+        )
         rounds.append(
             LoopRound(
                 round_index=start_index + len(rounds) + 1,
@@ -431,6 +440,10 @@ def run_agent_loop(
                 observation=observation,
             )
         )
+        if on_round is not None:
+            # 每完成一轮就把进度交出去：调用方（routes）据此刷新 entry.loop_state，
+            # 前端轮询才能「一步一步」画出产出，而不是等整段跑完才一次性冒出来。
+            on_round(list(rounds))
         context.history.append(
             {
                 "round": start_index + len(rounds),
@@ -481,7 +494,16 @@ def run_agent_loop(
             # 指纹 = 动作/参数 **+ 本次失败症状**：症状变了说明世界变了（模型改了代码），
             # 那不是"重复失败"，得给它下一轮（实测见 _failure_signature 的注释）。
             key = (_attempt_key(decision), symptom)
+            attempt = _attempt_key(decision)
+            if truncated_attempts.get(attempt):
+                # 上一次同动作的观察**被截断**了 → 模型没看到完整的失败原因，重发同一动作
+                # 是在「再要一次信息」，不是原地打转：本轮不计入重复失败，重新计时。
+                # 实测（任务 89c61c1f）：test_run 的 pytest 原因落在观察窗口之外，模型重发
+                # 同一个 test_run 索取细节 → 被这道闸门当成空转掐死，而测试仍 5 红。
+                # 不会因此无限重发：「连续两轮无进展判空转」照旧兜底（预算也是有界的）。
+                failed_attempts[key] = 0
             failed_attempts[key] = failed_attempts.get(key, 0) + 1
+            truncated_attempts[attempt] = observation_was_truncated(observation)
             if failed_attempts[key] >= MAX_REPEAT_FAILURES:
                 return LoopOutcome(
                     rounds=rounds,

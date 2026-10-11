@@ -267,12 +267,20 @@ class ProjectStore:
             return self._projects.get(self.DEFAULT_ID)
 
     def current_workspace_dir(self) -> Path:
-        """当前工作区目录；项目目录已失效时回退默认工作区。"""
+        """当前工作区目录。
+
+        **项目目录失效时不再静默换成别的目录**（实测 2026-10-10）：原先回退
+        ``default_workspace_dir()``，而它在 ``WORKSPACE_DIR`` 不存在时返回**产品自己的
+        项目根** —— 于是「当前项目被删掉」变成了「读写产品源码」，且同一份 ``/projects``
+        响应里 ``current_project_id``（死项目）与 ``workspace_dir``（产品仓库）互相矛盾。
+        现在退回**该项目自己登记的路径**：调用方会以「目录不存在」明确失败或返回空，
+        而不是跑到另一个目录里去读写。
+        """
         project = self.current()
         if project is not None:
             path = Path(project.path)
-            if path.is_dir():
-                return path.resolve()
+            # 存在就规范化；**不存在也返回它自己**（绝不替换成别的目录）。
+            return path.resolve() if path.is_dir() else path
         return default_workspace_dir()
 
     # ── 变更 ──

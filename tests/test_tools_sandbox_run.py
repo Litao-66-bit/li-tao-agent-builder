@@ -104,14 +104,39 @@ class TestSandboxRunEdge:
             )
         assert exc_info.value.error_name == "E_VALIDATION"
 
-    def test_no_path_uses_default(self, gatekeeper):
+    def test_no_path_uses_workspace_as_cwd(self, gatekeeper, tmp_path):
+        """无 `path` 时 cwd 必须是**当前工作区**，不能缺省成进程 cwd。
+
+        实测（任务 168760c4，2026-10-10）：缺省成进程 cwd（= 后端启动目录 = 产品仓库）后，
+        agent 写在工作区的 ``outputs/paper_agent.py`` 被**仓库里的同名诱饵**顶替执行，
+        报错与诱饵的 argparse 完全一致（``required: --topic`` /
+        ``unrecognized arguments: --json``），而同一次任务的 ``file_read`` 读的是工作区那份
+        —— 读的对象 ≠ 跑的对象。这与 ``test_run`` 卡 1 是同一类缺陷，口径必须一致。
+        """
+        from pathlib import Path
+
         with patch(
             "agent_builder.tools.impl.sandbox_run.subprocess.run",
             return_value=_FakeProc(stdout="ok"),
         ) as mock_run:
             registry.execute(gatekeeper, _make_call("operator", "ls"))
-        # 无 path 时 cwd 不被传入
-        assert "cwd" not in mock_run.call_args.kwargs
+
+        assert Path(mock_run.call_args.kwargs["cwd"]) == tmp_path
+
+    def test_相对路径命令必须跑工作区里的文件(self, gatekeeper, tmp_path):
+        """不 mock：工作区里放一个 ``outputs/probe.py``，跑相对路径命令必须命中它。
+
+        修前（cwd 缺省 = 进程 cwd，测试时是仓库根）这里会报
+        ``can't open file ... outputs/probe.py`` —— 正是实机把工作区文件换成仓库同名
+        诱饵的同一根因。
+        """
+        outputs = tmp_path / "outputs"
+        outputs.mkdir()
+        (outputs / "probe.py").write_text("print('WORKSPACE-FILE')", encoding="utf-8")
+
+        call = registry.execute(gatekeeper, _make_call("operator", "python outputs/probe.py"))
+
+        assert "WORKSPACE-FILE" in call.result
 
 
 # ── 安全 ────────────────────────────────────────────────────────
@@ -232,6 +257,57 @@ class TestSandboxRunInterpreterPath:
 
         env = mock_run.call_args.kwargs.get("env", {})
         assert env["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).parent)
+
+
+# ── 子进程编码（实测任务 168760c4）──────────────────────────────
+
+
+class TestSandboxRun子进程编码:
+    """回归（实测任务 168760c4，2026-10-10）：``sandbox_run`` 的
+    ``subprocess.run(text=True)`` 没指定编码 → 读线程按**本地编码（gbk）**解码；后端带
+    ``PYTHONIOENCODING=utf-8`` 启动时子进程写 UTF-8，解码即抛 UnicodeDecodeError →
+    ``proc.stdout`` / ``proc.stderr`` 变成 **None**：
+
+    - ``stdout=None`` → ``len(output)`` 抛 TypeError，被 registry 包成
+      「工具 'sandbox_run' 参数非法: object of type 'NoneType' has no len()」（模型看不懂）；
+    - ``stderr=None`` → ``if proc.stderr:`` 为假 → 报错里只剩「命令退出码 N」、
+      **丢掉全部输出**（模型只能盲重试；实测那一轮 sandbox_run 连撞 5 次）。
+
+    agent 生成的脚本几乎必然输出中文，所以这条会稳定踩到。
+    """
+
+    def test_读侧固定utf8并容错(self, gatekeeper):
+        with patch(
+            "agent_builder.tools.impl.sandbox_run.subprocess.run",
+            return_value=_FakeProc(stdout="ok"),
+        ) as mock_run:
+            registry.execute(gatekeeper, _make_call("operator", "python x.py"))
+
+        assert mock_run.call_args.kwargs.get("encoding") == "utf-8"
+        assert mock_run.call_args.kwargs.get("errors") == "replace"
+
+    def test_写侧固定UTF8(self, gatekeeper):
+        with patch(
+            "agent_builder.tools.impl.sandbox_run.subprocess.run",
+            return_value=_FakeProc(stdout="ok"),
+        ) as mock_run:
+            registry.execute(gatekeeper, _make_call("operator", "python x.py"))
+
+        assert mock_run.call_args.kwargs["env"]["PYTHONIOENCODING"] == "utf-8"
+
+    def test_真实子进程输出非GBK字符不再崩(self, gatekeeper, monkeypatch):
+        """不 mock：真起一个子进程打印**非 GBK 字符**。
+
+        修前（读侧没锁 utf-8）这里抛 ``TypeError: object of type 'NoneType' has no len()``
+        —— 正是实机 loop-004 的报错原文。命令行本身保持纯 ASCII，避免受 cmd 代码页影响。
+        """
+        monkeypatch.setenv("PYTHONIOENCODING", "utf-8")
+        call = registry.execute(
+            gatekeeper,
+            _make_call("operator", 'python -c "print(chr(20013)+chr(25991)+chr(128512))"'),
+        )
+
+        assert "中文" in call.result
 
 
 # ── 成本（截断）───────────────────────────────────────────────────

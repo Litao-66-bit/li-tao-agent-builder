@@ -433,3 +433,159 @@ class TestInvalidNeverBecomesFinal:
         assert seen == ["loop-001"]
         assert outcome.decided_by == "llm"
         assert outcome.rounds[0].decision.role == "searcher"
+
+
+# ── 观察内容必须逐行原样（实测任务 8d79faee）────────────────────
+
+
+# 观察内容样本（模块级常量：写成可变默认值的类属性会被 ruff RUF012 拦下）。
+_OBSERVATION_SRC: tuple[str, ...] = (
+    "def execute(self, plan):",
+    "    for sq in plan.sub_questions:",
+    "        sq.evidence = [",
+    '            f"关键词: {sq.keywords}",',
+    "        ]",
+    "    return plan",
+)
+
+
+class Test观察结果必须逐行原样:
+    """回归（实测任务 8d79faee，2026-10-10）：观察内容曾被 ``"     " + line`` 做块缩进，
+    模型照着提示词构造 ``file_edit`` 的 ``old_string`` 时把缩进一起抄走（6 行**全部
+    +4 空格**、两次独立尝试逐字符相同），而 ``file_edit`` 要求逐字符相等 →
+    连续三次「找不到 old_string」→ 空转判停 ``stagnant``（15/20 步、测试仍 3 红，
+    而模型的诊断每一步都是对的）。
+
+    所以：观察内容进提示词后**每一行都必须与原文完全一致**，边界只能用定界符表达。
+    """
+
+    def _prompt_with(self, observation: str) -> str:
+        context = _context()
+        context.history.append(
+            {
+                "round": 1,
+                "role": "code_worker",
+                "action": "file_read",
+                "status": "done",
+                "summary": "读取文件完成",
+                "observation": observation,
+            }
+        )
+        return build_decision_prompt(context)
+
+    def _observation_block(self, prompt: str) -> list[str]:
+        lines = prompt.splitlines()
+        return lines[lines.index("<observation>") + 1 : lines.index("</observation>")]
+
+    def test_缩进不被提示词改写(self) -> None:
+        src = list(_OBSERVATION_SRC)
+        block = self._observation_block(self._prompt_with("\n".join(src)))
+
+        assert block == src  # 缩进必须逐字符一致
+        for got, want in zip(block, src, strict=True):
+            assert len(got) - len(got.lstrip(" ")) == len(want) - len(want.lstrip(" "))
+
+    def test_模型照抄观察内容就能精确匹配(self) -> None:
+        """把提示词里的观察行**原样**拼成 old_string，必须能在原文里精确匹配到 ——
+        这就是实机失败的最小复现（修好之前，提示词里的行比原文多 5 个空格）。"""
+        source = "\n".join(_OBSERVATION_SRC)
+        copied = "\n".join(self._observation_block(self._prompt_with(source)))
+
+        assert source.count(copied) == 1
+
+    def test_提示词明说不要额外缩进(self) -> None:
+        prompt = self._prompt_with("\n".join(_OBSERVATION_SRC))
+
+        assert "未做任何额外缩进" in prompt
+        assert "逐字符复制" in prompt
+
+
+# ── 逐轮进度回调（实测 2026-10-10：长任务整段没有输出）──────────
+
+
+class TestOnRound回调:
+    """回归：``run_agent_loop`` 必须**每完成一轮**回调一次。
+
+    动机（真实浏览器实测）：``entry.loop_state`` 原先只在循环返回后写一次，于是
+    ``POST /run?wait=false`` + 前端轮询也画不出东西 —— 一个循环段内工具卡恒为 2 张，
+    直到该段结束才一口气冒出 5 张。逐轮回调是「边跑边出东西」的唯一数据来源。
+    """
+
+    def test_每轮回调一次且参数递增(self) -> None:
+        fake = _FakeLLM(
+            [
+                {"kind": "agent", "role": "searcher", "action": "web_search", "inputs": {"query": "a"}},
+                {"kind": "agent", "role": "searcher", "action": "web_search", "inputs": {"query": "b"}},
+                {"kind": "final"},
+            ]
+        )
+        seen: list[int] = []
+
+        def _on_round(rounds):
+            seen.append(len(rounds))
+
+        outcome = run_agent_loop(
+            context=_context(),
+            decider=LLMRouteDecider(llm_client=fake),
+            execute=lambda step: StepOutcome(status="done", summary="ok"),
+            on_round=_on_round,
+        )
+
+        # 两轮工具调用各回调一次；kind=final 那轮不执行工具 → 不再回调。
+        assert seen == [1, 2]
+        assert len(outcome.rounds) == 2
+
+    def test_不传回调时行为不变(self) -> None:
+        fake = _FakeLLM([{"kind": "final", "thought": "done"}])
+        outcome = run_agent_loop(
+            context=_context(),
+            decider=LLMRouteDecider(llm_client=fake),
+            execute=lambda step: StepOutcome(status="done"),
+        )
+        assert outcome.stopped_reason == STOP_FINAL
+
+
+# ── 失败观察保尾（实测任务 89c61c1f）────────────────────────────
+
+
+class Test失败观察保尾:
+    """回归：失败的观察原先**保头丢尾**，而 pytest 的失败原因在**末尾**
+    （short test summary 与 ``E   ...`` 行都在最后）→ 模型看不到原因，只能重发同一个
+    动作「再要一次」，然后被「重复失败」闸门掐死（那次 15 秒收工、测试仍 5 红）。
+    """
+
+    def _prompt_with(self, observation: str, status: str) -> str:
+        context = _context()
+        context.history.append(
+            {
+                "round": 1,
+                "role": "test_runner",
+                "action": "test_run",
+                "status": status,
+                "summary": "运行测试",
+                "observation": observation,
+            }
+        )
+        return build_decision_prompt(context)
+
+    def test_失败观察保留末尾(self) -> None:
+        head = "=" * 2500
+        tail = "FAILED tests/test_x.py::test_a - AssertionError: 真正的失败原因"
+        prompt = self._prompt_with(head + "\n" + tail, "failed")
+
+        assert "真正的失败原因" in prompt          # 原因必须进提示词
+        assert "此处只显示**末尾**" in prompt
+        assert "=" * 2000 not in prompt            # 头部被裁掉
+
+    def test_成功观察仍然保头(self) -> None:
+        prompt = self._prompt_with("x" * 5000, "done")
+
+        assert "此处只显示前" in prompt
+        assert "一次不超过 50 行" in prompt
+
+    def test_截断检测助手(self) -> None:
+        from agent_builder.api.deciders import observation_was_truncated
+
+        assert observation_was_truncated("…（原文 5000 字 / 共 1 行；…")
+        assert not observation_was_truncated("1 passed in 0.01s")
+        assert not observation_was_truncated(None)
